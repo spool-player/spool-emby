@@ -1,0 +1,24 @@
+{
+  "format": 2,
+  "api": "0.2",
+  "id": "spool.emby",
+  "name": "Emby",
+  "version": "0.1.0",
+  "publisher": "Spool",
+  "summary": "Your Emby server",
+  "homepage": "https://github.com/spool-player/spool-emby",
+  "icon": "assets/icon.svg",
+  "entry": "logic/provider.mjs",
+  "capabilities": ["search", "userState", "reporting", "segments", "streamQuality", "discovery", "remoteControl"],
+  "ui": {
+    "login": "ui/Login.qml",
+    "picker": "ui/Picker.qml"
+  },
+  "actions": [
+    {"id": "playlist", "label": "Add to playlist", "icon": "playlist_add",
+      "types": ["Movie", "Episode", "Series", "Season", "Audio", "MusicAlbum", "MusicVideo", "Video"]},
+    {"id": "collection", "label": "Add to collection", "icon": "library_add", "types": ["Movie", "Series"]},
+    {"id": "rename", "label": "Rename", "icon": "drive_file_rename_outline", "types": ["Playlist", "BoxSet"]},
+    {"id": "delete", "label": "Delete from server", "icon": "delete"}
+  ]
+}
