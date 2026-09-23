@@ -1,7 +1,7 @@
 {
   "api": "0.2",
   "upstream": "https://github.com/spool-player/spool",
-  "revision": "0fcae901432254313901ad1bf3a47afd61f43576",
+  "revision": "387ca15cef3549d6ccf3e142982e44ea0dad3bc8",
   "files": {
     "sdk/CMakeLists.txt": "14b20fd1a28ffe94a2ef0de54c8834d59b87f35d7eceacbd3252bc066ea4bea7",
     "sdk/LICENSE": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04",
