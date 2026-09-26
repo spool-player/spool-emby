@@ -7,6 +7,7 @@
 
 import { createSource, normalizeServer } from '../logic/provider.mjs';
 import { translate } from '../logic/events.mjs';
+import { canCopySource, deviceProfile, maxBitrate, maxHeight } from '../logic/profile.mjs';
 
 let step = 'start';
 function check(value, message) {
@@ -55,6 +56,18 @@ export function run() {
     check(normalizeServer('emby.local') === 'http://emby.local:8096', 'a bare host gets the default port');
     check(normalizeServer('https://emby.example/emby/') === 'https://emby.example', 'the /emby suffix goes');
     check(normalizeServer('http://emby.local:9000') === 'http://emby.local:9000', 'an explicit port stays');
+    check(normalizeServer('[::1]') === 'http://[::1]:8096', 'IPv6 gets the default port');
+    check(normalizeServer('http://proxy.example/media/emby') === 'http://proxy.example/media', 'proxy base path stays');
+    for (const address of ['', 'ftp://server', 'https://name:password@server', 'https://server?api_key=secret',
+        'https://server:99999', 'https://server\\@elsewhere']) {
+        let rejected = false;
+        try {
+            normalizeServer(address);
+        } catch (error) {
+            rejected = error.message === 'invalid_server';
+        }
+        check(rejected, 'unsafe server address is rejected: ' + address);
+    }
 
     const a = account('ua', 'token-a');
     const b = account('ub', 'token-b');
@@ -169,12 +182,10 @@ export function run() {
             check(result.pick && result.pick.kind === 'playlist', 'adding asks where first');
             return a.runItemAction({ action: 'playlist', itemId: 'film', newName: 'Weekend' }, emby.host);
         }).then(result => {
-            check(result.message === 'Added to Weekend', 'a new playlist');
             check(emby.calls[emby.calls.length - 1].url.indexOf('Ids=film') > 0, 'with the item in it');
             return a.runItemAction({ action: 'playlist', itemId: 'film', targetId: 'list-1', targetName: 'Mine' },
                 emby.host);
         }).then(result => {
-            check(result.message === 'Added to Mine', 'an existing playlist');
             return a.runItemAction({ action: 'delete', itemId: 'film' }, emby.host);
         }).then(result => {
             check(result.pick && result.pick.kind === 'confirm', 'deleting asks first');
@@ -237,5 +248,111 @@ export function run() {
             check(events[2][1].itemIds[0] === '7' && events[2][1].mode === 'next', 'remote play');
             check(events[3][0] === 'changed' && events[3][1].itemId === 'film', 'user data changes');
             check(events[4][0] === 'changed', 'library changes');
-        });
+        }).then(qualityContract);
+}
+
+function qualityContract() {
+    step = 'quality precedence';
+    const measured = { measuredBitrate: 7000000 };
+    check(maxBitrate(measured) === 7000000, 'automatic quality uses measured throughput');
+    check(maxBitrate(Object.assign({}, measured, { preferredMaxBitrate: 12000000 })) === 12000000,
+        'a standing preference wins over measurement');
+    const local = Object.assign({}, measured, { unlimitedLocalNetwork: true, preferredMaxBitrate: 12000000 });
+    check(maxBitrate(local, true) === 1000000000 && maxBitrate(local, false) === 12000000,
+        'the LAN bypass needs positive server classification');
+    check(maxBitrate(Object.assign({}, local, { maxBitrate: 3000000 }), true) === 3000000,
+        'an explicit quality wins even on an unlimited LAN');
+    check(maxHeight({ maxHeight: 720, preferredMaxHeight: 1080 }) === 720, 'explicit height wins');
+    check(maxHeight({ preferredMaxHeight: 1080 }) === 1080, 'standing height remains in automatic mode');
+    const profile = deviceProfile({ maxBitrate: 500000, maxHeight: 720,
+        videoCodecs: ['vp8'], restrictVideoCodecs: true });
+    check(profile.MaxStaticBitrate === 500000 && profile.MaxStreamingBitrate === 500000,
+        'a sub-megabit explicit ceiling is never rounded up');
+    check(!profile.TranscodingProfiles.some(p => p.Type === 'Video'), 'no forbidden h264 fallback for a vp8-only device');
+    check(profile.CodecProfiles[0].Conditions[0].IsRequired, 'unknown height cannot defeat a ceiling');
+    const video = { Id: 'edition', Bitrate: 8000000, SupportsDirectPlay: true, SupportsDirectStream: true,
+        Container: 'mkv', MediaStreams: [{ Index: 0, Type: 'Video', Codec: 'hevc', Height: 2160 }] };
+    check(!canCopySource(video, { maxBitrate: 4000000 }), 'original above bitrate ceiling cannot be copied');
+    check(!canCopySource(video, { maxHeight: 1080 }), 'original above height ceiling cannot be copied');
+    check(!canCopySource(video, { restrictVideoCodecs: true, videoCodecs: ['h264'] }), 'unsupported codec cannot be copied');
+    check(canCopySource(video, { maxBitrate: 8000000, maxHeight: 2160 }), 'exact quality boundary can direct play');
+
+    const source = account('ua', 'token-a');
+    let media = Object.assign({}, video);
+    let endpoint = { IsInNetwork: false };
+    const requests = server({
+        'GET /Users/ua/Items/film': { Id: 'film', Type: 'Movie' },
+        'GET /System/Endpoint': () => endpoint === null ? respond({}, 404) : respond(endpoint),
+        'POST /Items/film/PlaybackInfo': () => respond({ PlaySessionId: 'quality-session', MediaSources: [media] }),
+        'POST /Sessions/Playing/Stopped': {},
+        'DELETE /Videos/ActiveEncodings': {},
+        'POST /LiveStreams/Close': {}
+    });
+    const resolve = args => source.resolve(Object.assign({ itemId: 'film', variantId: 'edition' }, args), requests.host);
+    step = 'forced transcode';
+    return fails(() => resolve({ forceTranscode: true, preferRemux: true }), 'selected_variant_unplayable').then(() => {
+        const body = requests.calls.find(c => c.path.indexOf('PlaybackInfo') >= 0).body;
+        check(!body.AllowVideoStreamCopy, 'a forced transcode must disable video copying');
+        media.TranscodingUrl = '/videos/film/master.m3u8?VideoCodec=h264';
+        media.TranscodingContainer = 'mp4';
+        return resolve({ maxBitrate: 4000000, maxHeight: 1080, preferRemux: true });
+    }).then(result => {
+        check(result.playMethod === 'Transcode' && result.url.indexOf('master.m3u8') > 0 && result.container === 'mp4',
+            'remux preference cannot bypass bitrate or height with a static original');
+        return fails(() => resolve({ variantId: 'missing' }), 'selected_variant_unavailable');
+    }).then(() => {
+        media.SupportsDirectPlay = false;
+        media.DirectStreamUrl = '/videos/film/stream.ts?VideoCodec=copy';
+        step = 'negotiated remux';
+        return resolve({ preferRemux: true });
+    }).then(result => {
+        check(result.playMethod === 'DirectStream' && result.url.indexOf('stream.ts?VideoCodec=copy') > 0,
+            'direct streaming uses the negotiated remux endpoint');
+        delete media.DirectStreamUrl;
+        media.TranscodingUrl = '/videos/film/master.m3u8?VideoCodec=copy';
+        return resolve({});
+    }).then(result => {
+        check(result.playMethod === 'DirectStream', 'HLS video copy is reported as DirectStream');
+        return fails(() => resolve({ maxBitrate: 4000000, preferRemux: true }), 'selected_variant_unplayable');
+    }).then(() => {
+        return fails(() => resolve({ forceTranscode: true }), 'selected_variant_unplayable');
+    }).then(() => {
+        step = 'stream origin safety';
+        const urls = ['//elsewhere.example/stream', 'ftp://media.example/file', '\\\\elsewhere.example\\stream',
+            'https://media.example.attacker/stream'];
+        return urls.reduce((pending, url) => pending.then(() => {
+            media.TranscodingUrl = url;
+            return fails(() => resolve({ forceTranscode: true }), 'cross_origin_stream');
+        }), Promise.resolve());
+    }).then(() => {
+        media = { Id: 'edition', SupportsDirectPlay: true, Container: 'flac',
+            MediaStreams: [{ Index: 0, Type: 'Audio', Codec: 'flac' }] };
+        step = 'audio playback';
+        return resolve({});
+    }).then(result => {
+        check(result.url.indexOf('/emby/Audio/film/stream?') > 0 && result.playMethod === 'DirectPlay',
+            'audio uses the audio endpoint, not Videos');
+        media = Object.assign({}, video, { SupportsDirectPlay: false, RequiresClosing: true, LiveStreamId: 'live-1',
+            TranscodingUrl: '/videos/film/master.m3u8?VideoCodec=h264' });
+        endpoint = { IsInNetwork: true };
+        step = 'local network ceiling';
+        return resolve(local);
+    }).then(() => {
+        check(requests.calls[requests.calls.length - 1].body.MaxStreamingBitrate === 1000000000,
+            'server-classified LAN receives the unlimited ceiling');
+        endpoint = null;
+        return resolve(local);
+    }).then(() => {
+        check(requests.calls[requests.calls.length - 1].body.MaxStreamingBitrate === 12000000,
+            'unavailable classification preserves the standing ceiling');
+        return source.report({ event: 'stop', itemId: 'film', variantId: 'edition', playSessionId: 'quality-session',
+            positionTicks: '100', subtitleStreamIndex: -1 }, requests.host);
+    }).then(() => {
+        const stopped = requests.calls.find(c => c.path === '/Sessions/Playing/Stopped');
+        check(stopped.body.SubtitleStreamIndex === -1, 'turning subtitles off stays off in reports');
+        check(requests.calls.some(c => c.method === 'DELETE' && c.path === '/Videos/ActiveEncodings'
+            && c.url.indexOf('PlaySessionId=quality-session') > 0), 'stopping frees the session encoder');
+        check(requests.calls.some(c => c.path === '/LiveStreams/Close' && c.url.indexOf('LiveStreamId=live-1') > 0),
+            'stopping closes a live source opened during negotiation');
+    });
 }

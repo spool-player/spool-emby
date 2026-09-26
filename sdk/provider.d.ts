@@ -23,6 +23,16 @@ export interface HttpOptions {
 /** Redirects are not followed: `status` is 3xx and `location` is set. */
 export interface HttpResponse { status: number; body: string; location?: string }
 
+/** Authenticated generated download endpoint, or a range-capable media resource. */
+export interface SpeedTestEndpoint {
+    url: string; // HTTP(S); generated endpoints require {bytes} and {nonce}.
+    /** Probe a media file of at least 4 MiB with native Range requests and strict HTTP 206 validation. */
+    range?: boolean;
+    headers?: Record<string, string>;
+}
+/** Conservative playback ceiling (bits/s), not raw link capacity. */
+export interface SpeedTestResult { bitrate: number; parallelRequests: 1 | 2 | 4 }
+
 export interface Socket {
     onopen: (() => void) | null;
     onmessage: ((text: string) => void) | null;
@@ -65,6 +75,15 @@ export interface OperationHost extends SourceHost {
     delay(milliseconds: number): Promise<void>;
     /** UDP broadcast on the local network; replies within `timeout` ms (100–5000). */
     discover(options: { port: number; message: string; timeout?: number }): Promise<{ address: string; text: string }[]>;
+    /**
+     * Measures on the native provider worker, discarding response bodies.
+     * Same origin/TLS policy as http; no redirects or cookies. Cancelled with
+     * this operation. Generated endpoints return exactly the requested bytes;
+     * range endpoints must honor the native Range header and Content-Range.
+     * Warms 512 KiB, then compares 4 MiB totals over one, two and optionally
+     * four connections. Result reserves 25% headroom and is bounded to 1–1000 Mbps.
+     */
+    speedTest(endpoint: SpeedTestEndpoint): Promise<SpeedTestResult>;
 }
 
 /**
@@ -138,6 +157,10 @@ export interface PlaybackContext {
     preferredMaxBitrate: number; preferredMaxHeight: number; preferRemux: boolean; unlimitedLocalNetwork: boolean;
     /** What this device decodes when `restrictVideoCodecs`; otherwise anything. */
     videoCodecs: string[]; restrictVideoCodecs: boolean;
+    /** This account's measured conservative ceiling; zero until a successful idle probe. */
+    measuredBitrate: number;
+    /** Native playback range-request budget selected by the probe; two before measurement. */
+    parallelRequests: 1 | 2 | 4;
 }
 
 export interface Resolved {
@@ -173,6 +196,8 @@ export interface Source {
 
     resolve?: Operation<PlaybackContext & { itemId: string; variantId?: string; positionTicks: string; forceTranscode: boolean }, Resolved | PickRequest>;
     segments?: Operation<{ itemId: string }, { segments: Segment[] }>;
+    /** Capability `speedTest`: supply your endpoint through host.speedTest(), never download test bodies in JS. */
+    speedTest?: Operation<{}, SpeedTestResult>;
     report?: Operation<{ event: 'start' | 'progress' | 'stop'; itemId: string; variantId: string; playSessionId: string;
         playMethod: string; positionTicks: string; paused?: boolean; rate: number; volume?: number; muted?: boolean;
         failed?: boolean; audioStreamIndex: number; subtitleStreamIndex: number }, {}>;

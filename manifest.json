@@ -9,7 +9,7 @@
   "homepage": "https://github.com/spool-player/spool-emby",
   "icon": "assets/icon.svg",
   "entry": "logic/provider.mjs",
-  "capabilities": ["search", "userState", "reporting", "segments", "streamQuality", "discovery", "remoteControl"],
+  "capabilities": ["search", "userState", "reporting", "segments", "streamQuality", "speedTest", "discovery", "remoteControl"],
   "ui": {
     "login": "ui/Login.qml",
     "picker": "ui/Picker.qml"

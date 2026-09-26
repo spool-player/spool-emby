@@ -2,7 +2,7 @@
 // Emby for Spool: one source per signed-in user.
 
 import { collectionTypes, detailFields, fields, item, page, segments, stream } from './items.mjs';
-import { deviceProfile, maxBitrate } from './profile.mjs';
+import { canCopySource, deviceProfile, maxBitrate } from './profile.mjs';
 import { connect, remoteCommands } from './events.mjs';
 
 // sdk BrowseFilters keys this server takes as they are (its query names are
@@ -36,12 +36,13 @@ function start(args) {
 
 export function normalizeServer(input) {
     let text = String(input || '').trim().replace(/\/+$/, '').replace(/\/emby$/i, '');
-    if (!/^https?:\/\//i.test(text))
+    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text))
         text = 'http://' + text;
-    // A bare host gets Emby's default port.
-    if (/^http:\/\/[^/:]+$/i.test(text))
-        text += ':8096';
-    return text;
+    const parts = /^(https?):\/\/(\[[0-9a-f:]+\]|[^/:?#@\s\\]+)(:\d+)?(\/[^?#\\\s]*)?$/i.exec(text);
+    if (!parts || (parts[3] && (Number(parts[3].slice(1)) < 1 || Number(parts[3].slice(1)) > 65535)))
+        throw new Error('invalid_server');
+    return parts[1].toLowerCase() + '://' + parts[2]
+        + (parts[3] || (parts[1].toLowerCase() === 'http' && !parts[4] ? ':8096' : '')) + (parts[4] || '');
 }
 
 export function createSource(configuration, sourceHost) {
@@ -49,6 +50,19 @@ export function createSource(configuration, sourceHost) {
     const device = sourceHost.device || {};
     const token = configuration.token || '';
     const userId = configuration.userId || '';
+    const sessions = new Map();
+
+    function streamUrl(value) {
+        const path = String(value || '');
+        if (/^[a-z][a-z0-9+.-]*:/i.test(path)) {
+            if (!/^https?:\/\//i.test(path) || path.indexOf(server + '/') !== 0 || /[\\\r\n]/.test(path))
+                throw new Error('cross_origin_stream');
+            return path;
+        }
+        if (/^[\\/]{2}|\\|[\r\n]/.test(path))
+            throw new Error('cross_origin_stream');
+        return server + '/emby/' + path.replace(/^\/+/, '').replace(/^emby\//i, '');
+    }
 
     function headers(withToken) {
         const result = {
@@ -200,49 +214,68 @@ export function createSource(configuration, sourceHost) {
                 .then(([genres, ratings, tags, years]) => ({ genres: genres, officialRatings: ratings, tags: tags,
                     years: years.map(Number).filter(Number.isInteger) }));
         },
+        speedTest: (args, host) => host.speedTest({
+            url: server + '/emby/Playback/BitrateTest?Size={bytes}&_={nonce}',
+            headers: { 'X-Emby-Token': token }
+        }),
 
         resolve: (args, host) => {
-            const playbackInfo = request(host, 'POST', '/Items/' + segment(args.itemId) + '/PlaybackInfo',
-                { UserId: userId }, {
+            const localNetwork = args.unlimitedLocalNetwork && !args.maxBitrate
+                ? request(host, 'GET', '/System/Endpoint').then(
+                    endpoint => endpoint.IsLocal === true || endpoint.IsInNetwork === true, () => false)
+                : Promise.resolve(false);
+            const playbackInfo = localNetwork.then(local => request(host, 'POST',
+                '/Items/' + segment(args.itemId) + '/PlaybackInfo', { UserId: userId }, {
                     UserId: userId, MediaSourceId: args.variantId, StartTimeTicks: Number(args.positionTicks) || 0,
-                    MaxStreamingBitrate: maxBitrate(args), DeviceProfile: deviceProfile(args),
+                    MaxStreamingBitrate: maxBitrate(args, local), DeviceProfile: deviceProfile(args, local),
                     AudioStreamIndex: args.audioStreamIndex, SubtitleStreamIndex: args.subtitleStreamIndex,
                     EnableDirectPlay: !args.forceTranscode, EnableDirectStream: !args.forceTranscode,
-                    EnableTranscoding: true, AutoOpenLiveStream: true, AllowVideoStreamCopy: true, AllowAudioStreamCopy: true
-                });
-            // Intro and credit markers come with the item's chapters; ask at once.
-            const markers = request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })
-                .then(segments, () => []);
-            return Promise.all([playbackInfo, markers]).then(([playback, skip]) => {
+                    EnableTranscoding: true, IsPlayback: true, AutoOpenLiveStream: true,
+                    AllowVideoStreamCopy: !args.forceTranscode, AllowAudioStreamCopy: true
+                }));
+            // Item type distinguishes audio, and chapters carry Emby's skip markers.
+            const details = request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })
+                .then(raw => raw, () => null);
+            return Promise.all([playbackInfo, details, localNetwork]).then(([playback, raw, local]) => {
                 if (playback.ErrorCode)
                     throw new Error('playback_unavailable');
                 const sources = playback.MediaSources || [];
                 const source = args.variantId ? sources.find(s => String(s.Id) === args.variantId) : sources[0];
-                // Never swap in a different edition than the one asked for.
                 if (!source)
                     throw new Error('selected_variant_unavailable');
                 let url;
                 let playMethod;
-                const direct = !args.forceTranscode && (source.SupportsDirectPlay || (source.SupportsDirectStream && args.preferRemux));
-                if (direct || (!source.TranscodingUrl && source.SupportsDirectStream)) {
-                    url = server + '/emby/Videos/' + segment(args.itemId) + '/stream?' + query({ static: true,
-                        MediaSourceId: source.Id, DeviceId: device.id, PlaySessionId: playback.PlaySessionId });
-                    playMethod = source.SupportsDirectPlay ? 'DirectPlay' : 'DirectStream';
+                const copy = !args.forceTranscode && canCopySource(source, args, local);
+                if (copy && source.SupportsDirectPlay) {
+                    const audio = (raw && (raw.MediaType === 'Audio' || raw.Type === 'Audio' || raw.Type === 'AudioBook'))
+                        || ((source.MediaStreams || []).some(s => s.Type === 'Audio')
+                            && !(source.MediaStreams || []).some(s => s.Type === 'Video'));
+                    url = server + '/emby/' + (audio ? 'Audio/' : 'Videos/') + segment(args.itemId) + '/stream?'
+                        + query({ static: true, MediaSourceId: source.Id, DeviceId: device.id,
+                            PlaySessionId: playback.PlaySessionId, LiveStreamId: source.LiveStreamId });
+                    playMethod = 'DirectPlay';
+                } else if (copy && source.SupportsDirectStream && source.DirectStreamUrl
+                    && (args.preferRemux || !source.TranscodingUrl)) {
+                    url = streamUrl(source.DirectStreamUrl);
+                    playMethod = 'DirectStream';
                 } else if (source.TranscodingUrl) {
-                    // A credential for this server never goes to another host.
-                    if (/^https?:\/\//i.test(source.TranscodingUrl) && source.TranscodingUrl.indexOf(server + '/') !== 0)
-                        throw new Error('cross_origin_stream');
-                    url = /^https?:\/\//i.test(source.TranscodingUrl)
-                        ? source.TranscodingUrl
-                        : server + '/emby/' + source.TranscodingUrl.replace(/^\/+/, '').replace(/^emby\//i, '');
-                    playMethod = 'Transcode';
+                    url = streamUrl(source.TranscodingUrl);
+                    playMethod = /[?&]VideoCodec=copy(?:&|$)/i.test(url) ? 'DirectStream' : 'Transcode';
+                    if (!copy && playMethod === 'DirectStream')
+                        throw new Error('selected_variant_unplayable');
                 } else {
+                    // SupportsDirectStream alone never authorizes a static original-file fallback.
                     throw new Error('selected_variant_unplayable');
                 }
+                if (playback.PlaySessionId)
+                    sessions.set(playback.PlaySessionId, { liveStreamId: source.RequiresClosing ? source.LiveStreamId : '',
+                        transcoding: playMethod !== 'DirectPlay' });
                 return { url: url, headers: { 'X-Emby-Token': token }, variantId: String(source.Id),
                     playSessionId: playback.PlaySessionId || '', playMethod: playMethod,
-                    container: (source.Container || '').split(',')[0], streams: (source.MediaStreams || []).map(stream),
-                    segments: skip };
+                    container: ((playMethod === 'DirectPlay' ? source.Container : source.TranscodingContainer)
+                        || source.Container || '').split(',')[0],
+                    streams: (source.MediaStreams || []).map(stream),
+                    segments: segments(source.Chapters ? source : raw) };
             });
         },
         segments: (args, host) => request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })
@@ -258,8 +291,23 @@ export function createSource(configuration, sourceHost) {
                 PositionTicks: Number(args.positionTicks) || 0, IsPaused: Boolean(args.paused),
                 IsMuted: Boolean(args.muted), VolumeLevel: args.volume, PlaybackRate: args.rate || 1,
                 PlayMethod: args.playMethod, AudioStreamIndex: index(args.audioStreamIndex),
-                SubtitleStreamIndex: index(args.subtitleStreamIndex), CanSeek: true, Failed: Boolean(args.failed)
-            }).then(() => ({}));
+                SubtitleStreamIndex: args.subtitleStreamIndex === -1 ? -1 : index(args.subtitleStreamIndex),
+                CanSeek: true, Failed: Boolean(args.failed)
+            }).then(() => {
+                if (args.event !== 'stop')
+                    return {};
+                const session = sessions.get(args.playSessionId);
+                sessions.delete(args.playSessionId);
+                const cleanup = [];
+                if (args.playSessionId && ((session && session.transcoding)
+                    || args.playMethod === 'Transcode' || args.playMethod === 'DirectStream'))
+                    cleanup.push(request(host, 'DELETE', '/Videos/ActiveEncodings', {
+                        DeviceId: device.id, PlaySessionId: args.playSessionId }));
+                if (session && session.liveStreamId)
+                    cleanup.push(request(host, 'POST', '/LiveStreams/Close', {
+                        LiveStreamId: session.liveStreamId, PlaySessionId: args.playSessionId }));
+                return Promise.all(cleanup).then(() => ({}));
+            });
         },
 
         favorite: (args, host) => request(host, args.value ? 'POST' : 'DELETE',

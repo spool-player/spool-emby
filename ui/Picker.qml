@@ -11,6 +11,8 @@ FocusScope {
     property var provider
     readonly property string kind: provider ? String(provider.arguments.kind || "") : ""
     readonly property bool choosing: kind === "playlist" || kind === "collection"
+    property bool busy: false
+    property string error: ""
 
     function activate() {
         const item = Window.activeFocusItem
@@ -21,12 +23,21 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        if (choosing)
+        if (choosing) {
+            busy = true
             provider.requestList("targets", {
                                      "kind": kind
+                                 }).then(() => {
+                                     busy = false
+                                     Qt.callLater(() => list.count > 0 ? InputKeys.focus(list) : name.focusRow())
+                                 }, () => {
+                                     busy = false
+                                     error = "Couldn't load " + (kind === "playlist" ? "playlists" : "collections")
+                                     Qt.callLater(name.focusRow)
                                  })
-        Qt.callLater(() => choosing ? InputKeys.focus(list) : kind === "rename" ? name.focusRow() : InputKeys.focus(
-                                                                                      confirm))
+        } else {
+            Qt.callLater(() => kind === "rename" ? name.focusRow() : InputKeys.focus(confirm))
+        }
     }
 
     ColumnLayout {
@@ -45,11 +56,35 @@ FocusScope {
             font.weight: Font.DemiBold
         }
 
+        BusySpinner {
+            Layout.alignment: Qt.AlignHCenter
+            Layout.preferredWidth: Metrics.scaled(24)
+            Layout.preferredHeight: Metrics.scaled(24)
+            running: root.busy
+            visible: running
+        }
+
+        SecondaryText {
+            Layout.fillWidth: true
+            visible: root.error.length > 0
+            text: root.error
+            color: Theme.errorText
+            wrapMode: Text.Wrap
+        }
+
+        SecondaryText {
+            Layout.fillWidth: true
+            visible: root.choosing && !root.busy && !root.error && list.count === 0
+            text: "None yet. Create a new " + root.kind + " below."
+            wrapMode: Text.Wrap
+        }
+
         ListView {
             id: list
             Layout.fillWidth: true
             Layout.fillHeight: true
             visible: root.choosing
+            enabled: !root.busy
             clip: true
             model: root.provider ? root.provider.rows : null
             focus: true
