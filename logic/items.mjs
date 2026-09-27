@@ -76,8 +76,11 @@ export function item(raw) {
         episode: Number.isInteger(raw.IndexNumber) ? raw.IndexNumber : undefined,
         album: raw.Album || '', albumId: id(raw.AlbumId), albumArtist: raw.AlbumArtist || '',
         posterTag: images.Primary || '', logoTag: images.Logo || '', bannerTag: images.Banner || '',
-        thumbTag: images.Thumb || raw.ParentThumbImageTag || '',
-        backdropTag: (raw.BackdropImageTags || [])[0] || (raw.ParentBackdropImageTags || [])[0] || '',
+        thumbTag: images.Thumb || (id(raw.ParentThumbItemId) ? raw.ParentThumbImageTag : '') || '',
+        thumbItemId: images.Thumb ? undefined : id(raw.ParentThumbItemId),
+        backdropTag: (raw.BackdropImageTags || [])[0]
+            || (id(raw.ParentBackdropItemId) ? (raw.ParentBackdropImageTags || [])[0] : '') || '',
+        backdropItemId: (raw.BackdropImageTags || [])[0] ? undefined : id(raw.ParentBackdropItemId),
         seriesPosterTag: raw.SeriesPrimaryImageTag || '', albumPosterTag: raw.AlbumPrimaryImageTag || '',
         genres: raw.Genres || [], tags: raw.Tags || [], studios: (raw.Studios || []).map(s => s.Name),
         officialRating: raw.OfficialRating || '', communityRating: raw.CommunityRating || 0,

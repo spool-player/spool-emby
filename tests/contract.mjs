@@ -8,6 +8,7 @@
 import { createSource, normalizeServer } from '../logic/provider.mjs';
 import { translate } from '../logic/events.mjs';
 import { canCopySource, deviceProfile, maxBitrate, maxHeight } from '../logic/profile.mjs';
+import { item } from '../logic/items.mjs';
 
 let step = 'start';
 function check(value, message) {
@@ -52,6 +53,21 @@ function account(user, token) {
 }
 
 export function run() {
+    step = 'inherited artwork owners';
+    const inherited = { Id: 'episode', Type: 'Episode', SeriesId: 'series',
+        ParentBackdropItemId: 'series', ParentBackdropImageTags: ['series-backdrop'],
+        ParentThumbItemId: 'season', ParentThumbImageTag: 'season-thumb' };
+    const inheritedImages = item(inherited);
+    check(inheritedImages.backdropItemId === 'series' && inheritedImages.backdropTag === 'series-backdrop'
+        && inheritedImages.thumbItemId === 'season' && inheritedImages.thumbTag === 'season-thumb',
+        'inherited thumbnail and backdrop keep their distinct owners');
+    const ownImages = item(Object.assign({}, inherited, { ImageTags: { Thumb: 'own-thumb' },
+        BackdropImageTags: ['own-backdrop'] }));
+    check(!ownImages.thumbItemId && !ownImages.backdropItemId && ownImages.thumbTag === 'own-thumb'
+        && ownImages.backdropTag === 'own-backdrop', 'own images never inherit a parent owner');
+    const ownerless = item({ Id: 'episode', ParentThumbImageTag: 'unknown',
+        ParentBackdropImageTags: ['unknown'] });
+    check(!ownerless.thumbTag && !ownerless.backdropTag, 'unknown parent ownership cannot create a child image URL');
     step = 'server address';
     check(normalizeServer('emby.local') === 'http://emby.local:8096', 'a bare host gets the default port');
     check(normalizeServer('https://emby.example/emby/') === 'https://emby.example', 'the /emby suffix goes');
