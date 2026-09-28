@@ -79,7 +79,7 @@ export function translate(message, emit) {
 
 // Opens the socket, keeps it alive and reopens it after a drop, backing off
 // up to a minute. Returns a function that closes it for good.
-export function connect(host, url, headers) {
+export function connect(host, url, headers, invalidatePolicy, outboundEnabled = false) {
     let socket = null;
     let stopped = false;
     let failures = 0;
@@ -105,6 +105,8 @@ export function connect(host, url, headers) {
             return;
         }
         socket.onopen = () => {
+            if (invalidatePolicy)
+                invalidatePolicy();
             failures = 0;
             send({ MessageType: 'KeepAlive' });
             ping(++pings);
@@ -115,6 +117,15 @@ export function connect(host, url, headers) {
                 message = JSON.parse(text);
             } catch (error) {
                 return;
+            }
+            if (invalidatePolicy && ['UserUpdated', 'UserDeleted', 'UserConfigurationUpdated',
+                'UserPolicyUpdated'].indexOf(message.MessageType) >= 0)
+                invalidatePolicy();
+            if (outboundEnabled && message.MessageType === 'Sessions' && Array.isArray(message.Data)) {
+                for (const session of message.Data.slice(0, 128)) {
+                    if (typeof session.Id === 'string' && session.Id && session.DeviceId !== (host.device || {}).id)
+                        host.emit('remoteChanged', { targetId: session.Id });
+                }
             }
             if (message.MessageType === 'ForceKeepAlive') {
                 keepAlive = Math.max(5, Math.min(60, (Number(message.Data) || 60) / 2));

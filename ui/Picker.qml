@@ -23,6 +23,8 @@ FocusScope {
     }
 
     Component.onCompleted: {
+        if (kind === "remoteControls")
+            return
         if (choosing) {
             busy = true
             provider.requestList("targets", {
@@ -40,10 +42,26 @@ FocusScope {
         }
     }
 
-    ColumnLayout {
+    Loader {
         anchors.fill: parent
         anchors.margins: Metrics.pageMarginPx
+        active: root.kind === "remoteControls"
+        visible: active
+        sourceComponent: Component {
+            RemoteControls { provider: root.provider }
+        }
+    }
+
+    ColumnLayout {
+        anchors.fill: parent
+        visible: root.kind !== "remoteControls"
+        anchors.margins: Metrics.pageMarginPx
         spacing: Metrics.scaled(12)
+
+        CompatibilityNotice {
+            Layout.fillWidth: true
+            provider: root.provider
+        }
 
         AppText {
             text: ({

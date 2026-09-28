@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 // Emby for Spool: one source per signed-in user.
 
-import { collectionTypes, detailFields, fields, item, page, segments, stream } from './items.mjs';
+import { collectionTypes, detailFields, fields, item as mapItem, page as mapPage, segments, stream } from './items.mjs';
 import { canCopySource, deviceProfile, maxBitrate } from './profile.mjs';
 import { connect, remoteCommands } from './events.mjs';
+import { tickInteger, wireJson } from './wire.mjs';
+import { createCatalogue } from './catalogue.mjs';
+import { createSettings } from './settings.mjs';
+import { createRemote } from './remote.mjs';
+import { createConnect } from './connect.mjs';
 
 // sdk BrowseFilters keys this server takes as they are (its query names are
 // case-insensitive); lists of names are joined with |, the rest with commas.
@@ -34,15 +39,53 @@ function start(args) {
     return Number(cursor);
 }
 
-export function normalizeServer(input) {
-    let text = String(input || '').trim().replace(/\/+$/, '').replace(/\/emby$/i, '');
-    if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text))
-        text = 'http://' + text;
-    const parts = /^(https?):\/\/(\[[0-9a-f:]+\]|[^/:?#@\s\\]+)(:\d+)?(\/[^?#\\\s]*)?$/i.exec(text);
+function serverParts(input) {
+    const text = String(input || '').trim().replace(/\/+$/, '').replace(/\/emby$/i, '');
+    const explicit = /^[a-z][a-z0-9+.-]*:\/\//i.test(text);
+    const parts = /^(https?):\/\/(\[[0-9a-f:]+\]|[^/:?#@\s\\]+)(:\d+)?(\/[^?#\\\s]*)?$/i
+        .exec(explicit ? text : 'https://' + text);
     if (!parts || (parts[3] && (Number(parts[3].slice(1)) < 1 || Number(parts[3].slice(1)) > 65535)))
         throw new Error('invalid_server');
-    return parts[1].toLowerCase() + '://' + parts[2]
-        + (parts[3] || (parts[1].toLowerCase() === 'http' && !parts[4] ? ':8096' : '')) + (parts[4] || '');
+    return { explicit: explicit, scheme: parts[1].toLowerCase(), host: parts[2], port: parts[3] || '',
+        path: parts[4] || '' };
+}
+
+function literalAddress(host) {
+    return /^\[[0-9a-f]*:[0-9a-f:]*\]$/i.test(host)
+        || (/^\d+\.\d+\.\d+\.\d+$/.test(host) && host.split('.').every(part => Number(part) <= 255));
+}
+
+function serverCandidates(input) {
+    const parts = serverParts(input);
+    const address = (scheme, port) => scheme + '://' + parts.host + port + parts.path;
+    // A supplied scheme is a promise, not permission to downgrade HTTPS or
+    // substitute a conventional server port for the protocol's default.
+    if (parts.explicit)
+        return [address(parts.scheme, parts.port)];
+    const host = parts.host.toLowerCase();
+    const ipv4 = host.split('.').map(Number);
+    const local = host === 'localhost' || host === '[::1]' || /^\[f[cd]/.test(host) || /^\[fe[89ab]/.test(host)
+        || (literalAddress(host) && (ipv4[0] === 10 || ipv4[0] === 127
+            || (ipv4[0] === 192 && ipv4[1] === 168) || (ipv4[0] === 172 && ipv4[1] >= 16 && ipv4[1] <= 31)
+            || (ipv4[0] === 169 && ipv4[1] === 254)));
+    const https = address('https', parts.port);
+    const http = address('http', parts.port || ':8096');
+    return Array.from(new Set((local ? [http, https] : [https, http]).concat(address('http', parts.port))));
+}
+
+export function normalizeServer(input) {
+    return serverCandidates(input)[0];
+}
+
+function discoveredAddress(address, sender) {
+    // Validate before presenting an address for origin approval. Replace only
+    // literal hosts: a DNS name may deliberately name a reverse proxy.
+    serverParts(address);
+    const parts = /^(https?:\/\/)(\[[0-9a-f:]+\]|[^/:]+)(:\d+)?(\/.*)?$/i.exec(address);
+    const senderHost = String(sender || '').indexOf(':') >= 0 ? '[' + sender + ']' : String(sender || '');
+    if (!parts || !literalAddress(parts[2]) || !literalAddress(senderHost))
+        return address;
+    return parts[1] + senderHost + (parts[3] || '') + (parts[4] || '');
 }
 
 export function createSource(configuration, sourceHost) {
@@ -51,6 +94,27 @@ export function createSource(configuration, sourceHost) {
     const token = configuration.token || '';
     const userId = configuration.userId || '';
     const sessions = new Map();
+    const declared = ['spool.artwork-owners', 'spool.speed-test', 'spool.lan-probe',
+        'spool.suggestions', 'spool.item-actions', 'spool.collection-editing', 'spool.playback-queue-reporting',
+        'spool.playback-preferences', 'spool.settings-storage', 'spool.remote-targets'];
+    const extensions = {};
+    for (const id of declared) {
+        if (sourceHost.extensions && sourceHost.extensions[id] === 1)
+            extensions[id] = 1;
+    }
+    Object.freeze(extensions);
+    const missingHost = declared.filter(id => !extensions[id]);
+    const features = Object.freeze({ artworkOwners: extensions['spool.artwork-owners'] === 1 });
+    const item = raw => mapItem(raw, features);
+    const page = (result, first, limit) => mapPage(result, first, limit, features);
+    let lanSeen = new Set();
+    const userPath = path => '/Users/' + segment(userId) + path;
+
+    const catalogue = createCatalogue({ request, list, userPath, segment, extensions, userId, emby: true });
+    const settings = createSettings({ request, userPath, extensions, userId, emby: true });
+    const remote = createRemote({ request, item, userPath, userId, device, extensions, server, emby: true,
+        emit: sourceHost.emit });
+    const connectLogin = createConnect(device, normalizeServer, headers, info);
 
     function streamUrl(value) {
         const path = String(value || '');
@@ -80,15 +144,16 @@ export function createSource(configuration, sourceHost) {
     function request(host, method, path, parameters, body, base) {
         const suffix = query(parameters || {});
         return host.http((base || server) + '/emby' + path + (suffix ? '?' + suffix : ''), {
-            method: method, headers: headers(!base), body: body === undefined ? '' : JSON.stringify(body)
+            method: method, headers: headers(!base), body: body === undefined ? '' : wireJson(body)
         }).then(response => {
-            if (response.status < 200 || response.status >= 300)
+            if (response.status < 200 || response.status >= 300) {
+                if (response.status === 401 || response.status === 403)
+                    catalogue.invalidate();
                 throw new Error('http_' + response.status);
+            }
             return response.body ? JSON.parse(response.body) : {};
         });
     }
-
-    const userPath = path => '/Users/' + segment(userId) + path;
 
     function list(host, path, args, parameters) {
         const first = start(args);
@@ -111,7 +176,8 @@ export function createSource(configuration, sourceHost) {
     let disconnect = null;
     if (server && token && sourceHost.socket) {
         const socketUrl = server.replace(/^http/i, 'ws') + '/embywebsocket?' + query({ api_key: token, deviceId: device.id });
-        disconnect = connect(sourceHost, socketUrl, headers(true));
+        disconnect = connect(sourceHost, socketUrl, headers(true), catalogue.invalidate,
+            extensions['spool.remote-targets'] === 1);
         // Tell the server what this client can be asked to do.
         sourceHost.http(server + '/emby/Sessions/Capabilities/Full', {
             method: 'POST', headers: headers(true),
@@ -121,12 +187,26 @@ export function createSource(configuration, sourceHost) {
     }
 
     return {
+        extensionStatus: () => ({ enabled: extensions, missingHost: missingHost }),
+        remoteTargets: remote.remoteTargets,
+        remoteConnect: remote.remoteConnect,
+        remoteState: remote.remoteState,
+        remoteQueue: remote.remoteQueue,
+        remoteCommand: remote.remoteCommand,
+        remoteControls: remote.remoteControls,
+        remoteControl: remote.remoteControl,
         describe: () => ({
+            extensions: extensions,
             artwork: server + '/emby/Items/{itemId}/Images/{type}?tag={tag}&maxWidth={width}&quality={quality}&format={format}'
         }),
 
         // Sign-in. These run before the account exists, against `server`
         // given in the arguments, once the screen has allowed that origin.
+        serverCandidates: args => ({ servers: serverCandidates(args.server) }),
+        connectPin: connectLogin.connectPin,
+        connectPoll: connectLogin.connectPoll,
+        connectAuthenticate: connectLogin.connectAuthenticate,
+        connectExchange: connectLogin.connectExchange,
         discover: (args, host) => host.discover({ port: 7359, message: 'who is EmbyServer?', timeout: 1500 })
             .then(replies => {
                 const servers = {};
@@ -134,11 +214,42 @@ export function createSource(configuration, sourceHost) {
                     try {
                         const found = JSON.parse(reply.text);
                         if (found.Id && found.Address)
-                            servers[found.Id] = { id: found.Id, name: found.Name || found.Address, address: found.Address };
+                            servers[found.Id] = { id: found.Id, name: found.Name || found.Address,
+                                address: discoveredAddress(found.Address, reply.address) };
                     } catch (error) {}
                 }
                 return { servers: Object.values(servers) };
             }),
+        discoverMore: (args, host) => {
+            if (extensions['spool.lan-probe'] !== 1 || typeof host.probeLocalHttp !== 'function')
+                throw new Error('unsupported_extension');
+            const options = { port: 8096, path: '/emby/System/Info/Public', limit: 32 };
+            if (args.cursor !== undefined && args.cursor !== null)
+                options.cursor = args.cursor;
+            return host.probeLocalHttp(options).then(result => {
+                if (options.cursor === undefined)
+                    lanSeen = new Set();
+                const servers = [];
+                for (const response of result.responses) {
+                    if (response.status !== 200)
+                        continue;
+                    try {
+                        const info = JSON.parse(response.body);
+                        if (!info || typeof info.Id !== 'string' || !info.Id.trim() || info.Id.length > 256
+                            || typeof info.ServerName !== 'string' || !info.ServerName.trim()
+                            || info.ServerName.length > 256 || typeof info.Version !== 'string' || !info.Version
+                            || (info.ProductName !== undefined && (typeof info.ProductName !== 'string'
+                                || !/^Emby(?: Server)?$/i.test(info.ProductName)))
+                            || lanSeen.has(info.Id))
+                            continue;
+                        const address = normalizeServer(response.origin);
+                        lanSeen.add(info.Id);
+                        servers.push({ id: info.Id, name: info.ServerName, address: address });
+                    } catch (error) {}
+                }
+                return { servers: servers, cursor: result.cursor, exhausted: result.exhausted };
+            });
+        },
         probe: (args, host) => {
             const base = normalizeServer(args.server);
             return info(host, base).then(found => request(host, 'GET', '/Users/Public', {}, undefined, base)
@@ -189,8 +300,19 @@ export function createSource(configuration, sourceHost) {
             return list(host, userPath('/Items'), args, parameters);
         },
         items: (args, host) => list(host, userPath('/Items'), args, { Ids: (args.ids || []).join(',') }),
-        search: (args, host) => list(host, userPath('/Items'), args, { SearchTerm: args.query, Recursive: true,
-            IncludeItemTypes: 'Movie,Series,Episode,MusicVideo,Video,Audio,MusicAlbum,MusicArtist,Book,AudioBook,BoxSet,Playlist' }),
+        search: catalogue.search,
+        suggestions: catalogue.suggestions,
+        itemActions: catalogue.itemActions,
+        collectionInfo: catalogue.collectionInfo,
+        collectionEntries: catalogue.collectionEntries,
+        collectionRemove: catalogue.collectionRemove,
+        collectionMove: catalogue.collectionMove,
+        preferencesRead: settings.preferencesRead,
+        preferencesWrite: settings.preferencesWrite,
+        dataInfo: settings.dataInfo,
+        dataRead: settings.dataRead,
+        dataWrite: settings.dataWrite,
+        dataDelete: settings.dataDelete,
         details: (args, host) => request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: detailFields })
             .then(raw => ({ item: item(raw) })),
         seasons: (args, host) => list(host, '/Shows/' + segment(args.seriesId) + '/Seasons', args),
@@ -214,19 +336,24 @@ export function createSource(configuration, sourceHost) {
                 .then(([genres, ratings, tags, years]) => ({ genres: genres, officialRatings: ratings, tags: tags,
                     years: years.map(Number).filter(Number.isInteger) }));
         },
-        speedTest: (args, host) => host.speedTest({
-            url: server + '/emby/Playback/BitrateTest?Size={bytes}&_={nonce}',
-            headers: { 'X-Emby-Token': token }
-        }),
+        speedTest: (args, host) => {
+            if (extensions['spool.speed-test'] !== 1)
+                throw new Error('unsupported_extension');
+            return host.speedTest({
+                url: server + '/emby/Playback/BitrateTest?Size={bytes}&_={nonce}',
+                headers: { 'X-Emby-Token': token }
+            });
+        },
 
         resolve: (args, host) => {
+            const position = tickInteger(args.positionTicks);
             const localNetwork = args.unlimitedLocalNetwork && !args.maxBitrate
                 ? request(host, 'GET', '/System/Endpoint').then(
                     endpoint => endpoint.IsLocal === true || endpoint.IsInNetwork === true, () => false)
                 : Promise.resolve(false);
             const playbackInfo = localNetwork.then(local => request(host, 'POST',
                 '/Items/' + segment(args.itemId) + '/PlaybackInfo', { UserId: userId }, {
-                    UserId: userId, MediaSourceId: args.variantId, StartTimeTicks: Number(args.positionTicks) || 0,
+                    UserId: userId, MediaSourceId: args.variantId, StartTimeTicks: position,
                     MaxStreamingBitrate: maxBitrate(args, local), DeviceProfile: deviceProfile(args, local),
                     AudioStreamIndex: args.audioStreamIndex, SubtitleStreamIndex: args.subtitleStreamIndex,
                     EnableDirectPlay: !args.forceTranscode, EnableDirectStream: !args.forceTranscode,
@@ -286,14 +413,14 @@ export function createSource(configuration, sourceHost) {
             if (!endpoint)
                 throw new Error('invalid_report');
             const index = value => (Number.isInteger(value) && value >= 0 ? value : undefined);
-            return request(host, 'POST', endpoint, {}, {
+            return request(host, 'POST', endpoint, {}, Object.assign({
                 ItemId: args.itemId, MediaSourceId: args.variantId, PlaySessionId: args.playSessionId,
-                PositionTicks: Number(args.positionTicks) || 0, IsPaused: Boolean(args.paused),
+                PositionTicks: tickInteger(args.positionTicks), IsPaused: Boolean(args.paused),
                 IsMuted: Boolean(args.muted), VolumeLevel: args.volume, PlaybackRate: args.rate || 1,
                 PlayMethod: args.playMethod, AudioStreamIndex: index(args.audioStreamIndex),
                 SubtitleStreamIndex: args.subtitleStreamIndex === -1 ? -1 : index(args.subtitleStreamIndex),
                 CanSeek: true, Failed: Boolean(args.failed)
-            }).then(() => {
+            }, catalogue.queueFields(args))).then(() => {
                 if (args.event !== 'stop')
                     return {};
                 const session = sessions.get(args.playSessionId);
@@ -315,10 +442,10 @@ export function createSource(configuration, sourceHost) {
         played: (args, host) => request(host, args.value ? 'POST' : 'DELETE',
             userPath('/PlayedItems/' + segment(args.itemId))).then(() => ({})),
         progress: (args, host) => request(host, 'POST', userPath('/Items/' + segment(args.itemId) + '/UserData'), {},
-            { PlaybackPositionTicks: Number(args.positionTicks) || 0 }).then(() => ({})),
+            { PlaybackPositionTicks: tickInteger(args.positionTicks) }).then(() => ({})),
 
         // Item menu actions from manifest.json; `pick` shows ui/Picker.qml.
-        runItemAction: (args, host) => {
+        runItemAction: (args, host) => catalogue.authorizeAction(args, host).then(() => {
             const id = segment(args.itemId);
             const path = args.action === 'playlist' ? '/Playlists' : '/Collections';
             switch (args.action) {
@@ -346,7 +473,7 @@ export function createSource(configuration, sourceHost) {
             default:
                 throw new Error('unsupported_action');
             }
-        },
+        }),
         // Where an item could be added, for the picker.
         targets: (args, host) => request(host, 'GET', userPath('/Items'), { Recursive: true,
             IncludeItemTypes: args.kind === 'playlist' ? 'Playlist' : 'BoxSet', SortBy: 'SortName', Limit: 500 })

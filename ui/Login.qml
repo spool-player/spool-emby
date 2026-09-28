@@ -2,9 +2,9 @@
 import QtQuick
 import QtQuick.Layouts
 import Spool
+import "../logic/connect-flow.mjs" as ConnectFlow
 
-// Signing in to an Emby server: one found on the network or typed, then a
-// user and password.
+// Server/password and optional Emby Connect both produce ordinary local accounts.
 FocusScope {
     id: root
 
@@ -15,13 +15,136 @@ FocusScope {
     property string error: ""
     property var server: ({})
     property int generation: 0
+    property bool lanAvailable: false
+    property bool lanSearching: false
+    property int lanGeneration: 0
+    property string lanStatus: ""
+    property var connectFlow: null
+    property var connectState: ({ phase: "idle", pin: "", memberships: [], busy: false })
+    property var connectTimerCallback: null
+
+    function startConnect() {
+        cancelLocalSearch()
+        ++generation
+        error = ""
+        step = "connect"
+        if (!connectFlow) {
+            connectFlow = ConnectFlow.createConnectFlow({
+                request: (operation, args) => provider.request(operation, args),
+                approve: address => provider.allowOrigin(address),
+                closed: () => !provider || provider.closed,
+                complete: account => provider.complete(account),
+                stopTimer: () => {
+                    connectTimer.stop()
+                    connectTimerCallback = null
+                },
+                schedule: (callback, milliseconds) => {
+                    connectTimerCallback = callback
+                    connectTimer.interval = milliseconds
+                    connectTimer.restart()
+                },
+                changed: state => {
+                    connectState = state
+                    busy = state.busy
+                    error = state.error ? (messages[state.error] || "Emby Connect couldn't be reached. Try again or use server sign-in.") : ""
+                    if (state.phase === "pin" || state.phase === "error")
+                        Qt.callLater(() => InputKeys.focus(connectRetry))
+                    else if (state.phase === "members")
+                        Qt.callLater(() => InputKeys.focus(connectBack))
+                }
+            })
+        }
+        connectFlow.start()
+    }
+
+    function cancelConnect() {
+        if (connectFlow)
+            connectFlow.cancel()
+        connectState = { phase: "idle", pin: "", memberships: [], busy: false }
+    }
+
+    Timer {
+        id: connectTimer
+        repeat: false
+        onTriggered: {
+            const callback = root.connectTimerCallback
+            root.connectTimerCallback = null
+            if (callback)
+                callback()
+        }
+    }
+
+    function mergeServers(found) {
+        const merged = servers.slice()
+        const ids = new Set(merged.map(entry => entry.id))
+        for (const entry of found) {
+            if (!ids.has(entry.id)) {
+                ids.add(entry.id)
+                merged.push(entry)
+            }
+        }
+        servers = merged
+    }
+
+    function cancelLocalSearch() {
+        if (!lanSearching)
+            return
+        ++lanGeneration
+        lanSearching = false
+        lanStatus = "Search cancelled"
+        if (provider && !provider.closed)
+            provider.cancelLanDiscovery()
+    }
+
+    function searchLocalNetwork() {
+        if (!lanAvailable || lanSearching || busy || step !== "server")
+            return
+        const request = ++lanGeneration
+        lanSearching = true
+        lanStatus = "Waiting for local network permission"
+        error = ""
+        let pages = 0
+        const cursors = new Set()
+        function next(cursor) {
+            if (request !== lanGeneration || provider.closed)
+                return Promise.resolve()
+            lanStatus = "Searching local network: " + pages + " pages checked"
+            return provider.request("discoverMore", cursor ? { "cursor": cursor } : {}).then(result => {
+                if (request !== lanGeneration || provider.closed)
+                    return
+                ++pages
+                mergeServers(result.servers || [])
+                lanStatus = pages + " pages checked; " + servers.length + " servers found"
+                if (result.exhausted === true) {
+                    lanSearching = false
+                    return
+                }
+                if (typeof result.cursor !== "string" || !result.cursor || cursors.has(result.cursor) || pages >= 16)
+                    throw "invalid_pagination"
+                cursors.add(result.cursor)
+                return next(result.cursor)
+            })
+        }
+        provider.allowLanDiscovery().then(() => next(null)).catch(code => {
+            if (request !== lanGeneration || provider.closed)
+                return
+            cancelLocalSearch()
+            lanStatus = code === "cancelled" || code === "discovery_denied"
+                ? "Local search was not allowed. Use a discovered server or enter an address."
+                : "Local search failed. You can retry or enter a server address."
+        })
+    }
 
     readonly property var messages: ({
                                          "http_401": "Wrong username or password",
                                          "invalid_credentials": "Wrong username or password",
                                          "not_emby": "Not an Emby server",
                                          "invalid_server": "Enter a valid HTTP or HTTPS server address",
-                                         "origin_denied": "Not a server address"
+                                         "origin_denied": "Not a server address",
+                                         "connect_expired": "This code has expired. Get a new code to try again.",
+                                         "connect_server_mismatch": "This address belongs to a different server. No account was added.",
+                                         "connect_unavailable": "Emby Connect or the selected server couldn't be reached. Try again.",
+                                         "invalid_connect_response": "Emby Connect or the selected server returned an invalid sign-in response."
                                      })
 
     function fail(code) {
@@ -29,50 +152,43 @@ FocusScope {
         error = messages[code] || "Couldn't reach the server"
     }
 
-    // Same rule as normalizeServer() in logic/provider.mjs, so the origin
-    // allowed here is the one requests go to.
-    function normalized(input) {
-        let text = String(input || "").trim().replace(/\/+$/, "").replace(/\/emby$/i, "")
-        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(text))
-            text = "http://" + text
-        const parts = /^(https?):\/\/(\[[0-9a-f:]+\]|[^/:?#@\s\\]+)(:\d+)?(\/[^?#\\\s]*)?$/i.exec(text)
-        if (!parts || (parts[3] && (Number(parts[3].slice(1)) < 1 || Number(parts[3].slice(1)) > 65535)))
-            throw new Error("invalid_server")
-        return parts[1].toLowerCase() + "://" + parts[2] + (parts[3] || (parts[1].toLowerCase() === "http" && !parts[4]
-                                                                         ? ":8096" : "")) + (parts[4] || "")
-    }
-
     function connect(input) {
         if (busy || String(input).trim().length === 0)
             return
-        let address
-        try {
-            address = normalized(input)
-        } catch (failure) {
-            fail(failure.message)
-            return
-        }
+        cancelLocalSearch()
         const request = ++generation
         busy = true
         error = ""
-        provider.allowOrigin(address).then(() => provider.request("probe", {
-                                                                      "server": address
-                                                                  })).then(result => {
-                                                                      if (request !== generation)
-                                                                          return
-                                                                      busy = false
-                                                                      server = result
-                                                                      usernameField.text = ""
-                                                                      passwordField.text = ""
-                                                                      step = "account"
-                                                                      Qt.callLater(() => userProfiles.count > 0
-                                                                                         ? InputKeys.focus(
-                                                                                               userProfiles.itemAt(0)) :
-                                                                                           usernameField.focusRow())
-                                                                  }, code => {
-                                                                      if (request === generation)
-                                                                          fail(code)
-                                                                  })
+        // Each fallback gets its own origin approval, before any HTTP request.
+        // Explicit HTTPS produces only one candidate and never downgrades.
+        function attempt(candidates, index) {
+            if (request !== generation)
+                return Promise.reject("cancelled")
+            const address = candidates[index]
+            return provider.allowOrigin(address).then(() => {
+                if (request !== generation)
+                    return Promise.reject("cancelled")
+                return provider.request("probe", { "server": address }).then(result => result, code => {
+                    if (request !== generation || code === "cancelled" || code === "origin_denied"
+                            || index + 1 >= candidates.length)
+                        return Promise.reject(code)
+                    return attempt(candidates, index + 1)
+                })
+            })
+        }
+        provider.request("serverCandidates", { "server": input }).then(result => attempt(result.servers, 0)).then(result => {
+            if (request !== generation)
+                return
+            busy = false
+            server = result
+            usernameField.text = ""
+            passwordField.text = ""
+            step = "account"
+            Qt.callLater(() => userProfiles.count > 0 ? InputKeys.focus(userProfiles.itemAt(0)) : usernameField.focusRow())
+        }, code => {
+            if (request === generation)
+                fail(code)
+        })
     }
 
     function signIn(name, password) {
@@ -97,9 +213,14 @@ FocusScope {
     }
 
     function back() {
+        if (lanSearching) {
+            cancelLocalSearch()
+            return true
+        }
         if (step === "server")
             return false
         ++generation
+        cancelConnect()
         busy = false
         passwordField.text = ""
         error = ""
@@ -119,8 +240,32 @@ FocusScope {
     }
 
     Component.onCompleted: {
-        provider.request("discover").then(result => servers = result.servers || [], () => {})
+        provider.request("discover").then(result => {
+            if (!provider.closed)
+                mergeServers(result.servers || [])
+        }, () => {})
+        provider.request("extensionStatus").then(result => {
+            lanAvailable = !provider.closed && result.enabled && result.enabled["spool.lan-probe"] === 1
+        }, () => {})
         Qt.callLater(address.focusRow)
+    }
+
+    Component.onDestruction: {
+        ++generation
+        cancelLocalSearch()
+        cancelConnect()
+    }
+
+    Connections {
+        target: root.provider
+        function onClosedChanged() {
+            if (root.provider.closed) {
+                ++root.generation
+                root.cancelConnect()
+                root.cancelLocalSearch()
+                root.lanAvailable = false
+            }
+        }
     }
 
     Flickable {
@@ -135,6 +280,11 @@ FocusScope {
             y: Metrics.pageMarginPx
             width: Math.min(root.width - Metrics.pageMarginPx * 2, Metrics.scaled(560))
             spacing: Metrics.scaled(12)
+
+            CompatibilityNotice {
+                Layout.fillWidth: true
+                provider: root.provider
+            }
 
             AppText {
                 Layout.fillWidth: true
@@ -156,6 +306,100 @@ FocusScope {
                     enabled: !root.busy
                     onAccepted: root.connect(modelData.address)
                 }
+            }
+            ActionButton {
+                Layout.alignment: Qt.AlignLeft
+                visible: root.step === "server"
+                enabled: !root.busy
+                text: "Sign in with Emby Connect"
+                onClicked: root.startConnect()
+            }
+
+            AppText {
+                Layout.fillWidth: true
+                visible: root.step === "connect"
+                text: "Emby Connect"
+                font.pixelSize: Metrics.titleSizePx
+                font.weight: Font.DemiBold
+            }
+
+            SecondaryText {
+                Layout.fillWidth: true
+                visible: root.step === "connect" && root.connectState.phase === "pin"
+                text: "Open emby.media/pin on another device and enter this code:"
+                wrapMode: Text.Wrap
+            }
+
+            AppText {
+                Layout.fillWidth: true
+                visible: root.step === "connect" && root.connectState.pin.length > 0
+                text: root.connectState.pin
+                font.pixelSize: Metrics.titleSizePx
+                font.weight: Font.DemiBold
+            }
+
+            SecondaryText {
+                Layout.fillWidth: true
+                visible: root.step === "connect" && root.connectState.phase === "members"
+                text: root.connectState.memberships.length
+                    ? "Choose a server connection. Only the address you choose will be approved."
+                    : "No server memberships are available for this Emby Connect account."
+                wrapMode: Text.Wrap
+            }
+
+            Repeater {
+                model: root.step === "connect" ? root.connectState.memberships : []
+                delegate: ColumnLayout {
+                    id: membershipRow
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    Repeater {
+                        model: membershipRow.modelData.addresses
+                        delegate: ServerCard {
+                            required property string modelData
+                            required property int index
+                            Layout.fillWidth: true
+                            title: membershipRow.modelData.name
+                            serverAddress: modelData
+                            enabled: !root.busy
+                            onAccepted: root.connectFlow.select(membershipRow.index, index)
+                        }
+                    }
+                }
+            }
+
+            ActionButton {
+                id: connectRetry
+                Layout.alignment: Qt.AlignLeft
+                visible: root.step === "connect"
+                text: "Get a new code"
+                onClicked: root.startConnect()
+            }
+
+            ActionButton {
+                id: connectBack
+                Layout.alignment: Qt.AlignLeft
+                visible: root.step === "connect"
+                kind: "flat"
+                text: "Back to server sign-in"
+                onClicked: root.back()
+            }
+
+            ActionButton {
+                Layout.alignment: Qt.AlignLeft
+                visible: root.step === "server" && root.lanAvailable
+                enabled: !root.busy
+                text: root.lanSearching ? "Cancel local search" : "Search local network"
+                kind: "flat"
+                onClicked: root.lanSearching ? root.cancelLocalSearch() : root.searchLocalNetwork()
+            }
+
+            SecondaryText {
+                Layout.fillWidth: true
+                visible: root.step === "server" && root.lanStatus.length > 0
+                text: root.lanStatus
+                wrapMode: Text.Wrap
             }
 
             TextFieldRow {

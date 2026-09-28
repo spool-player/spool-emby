@@ -9,10 +9,16 @@
   "homepage": "https://github.com/spool-player/spool-emby",
   "icon": "assets/icon.svg",
   "entry": "logic/provider.mjs",
-  "capabilities": ["search", "userState", "reporting", "segments", "streamQuality", "speedTest", "discovery", "remoteControl"],
+  "capabilities": ["search", "userState", "reporting", "segments", "streamQuality", "discovery", "remoteControl"],
+  "extensions": {"spool.artwork-owners": 1, "spool.speed-test": 1, "spool.lan-probe": 1,
+    "spool.suggestions": 1, "spool.item-actions": 1, "spool.collection-editing": 1,
+    "spool.playback-queue-reporting": 1, "spool.playback-preferences": 1, "spool.settings-storage": 1,
+    "spool.remote-targets": 1},
+  "origins": ["https://connect.emby.media"],
   "ui": {
     "login": "ui/Login.qml",
-    "picker": "ui/Picker.qml"
+    "picker": "ui/Picker.qml",
+    "settings": "ui/Settings.qml"
   },
   "actions": [
     {"id": "playlist", "label": "Add to playlist", "icon": "playlist_add",

@@ -55,7 +55,7 @@ function variant(raw) {
     };
 }
 
-export function item(raw) {
+export function item(raw, features = {}) {
     const itemId = id(raw.Id);
     if (!itemId)
         throw new Error('missing_id');
@@ -63,6 +63,7 @@ export function item(raw) {
     const images = raw.ImageTags || {};
     const result = {
         id: itemId, title: raw.Name || '', sortName: raw.SortName || '', type: raw.Type || 'Folder',
+        entryId: id(raw.PlaylistItemId),
         overview: raw.Overview || '', year: raw.ProductionYear || 0,
         runtimeTicks: ticks(raw.RunTimeTicks), resumeTicks: ticks(user.PlaybackPositionTicks),
         favorite: Boolean(user.IsFavorite), played: Boolean(user.Played), playCount: user.PlayCount || 0,
@@ -76,11 +77,11 @@ export function item(raw) {
         episode: Number.isInteger(raw.IndexNumber) ? raw.IndexNumber : undefined,
         album: raw.Album || '', albumId: id(raw.AlbumId), albumArtist: raw.AlbumArtist || '',
         posterTag: images.Primary || '', logoTag: images.Logo || '', bannerTag: images.Banner || '',
-        thumbTag: images.Thumb || (id(raw.ParentThumbItemId) ? raw.ParentThumbImageTag : '') || '',
-        thumbItemId: images.Thumb ? undefined : id(raw.ParentThumbItemId),
+        thumbTag: images.Thumb || (features.artworkOwners && id(raw.ParentThumbItemId) ? raw.ParentThumbImageTag : '') || '',
+        thumbItemId: images.Thumb || !features.artworkOwners ? undefined : id(raw.ParentThumbItemId),
         backdropTag: (raw.BackdropImageTags || [])[0]
-            || (id(raw.ParentBackdropItemId) ? (raw.ParentBackdropImageTags || [])[0] : '') || '',
-        backdropItemId: (raw.BackdropImageTags || [])[0] ? undefined : id(raw.ParentBackdropItemId),
+            || (features.artworkOwners && id(raw.ParentBackdropItemId) ? (raw.ParentBackdropImageTags || [])[0] : '') || '',
+        backdropItemId: (raw.BackdropImageTags || [])[0] || !features.artworkOwners ? undefined : id(raw.ParentBackdropItemId),
         seriesPosterTag: raw.SeriesPrimaryImageTag || '', albumPosterTag: raw.AlbumPrimaryImageTag || '',
         genres: raw.Genres || [], tags: raw.Tags || [], studios: (raw.Studios || []).map(s => s.Name),
         officialRating: raw.OfficialRating || '', communityRating: raw.CommunityRating || 0,
@@ -97,11 +98,11 @@ export function item(raw) {
     return result;
 }
 
-export function page(result, start, limit) {
+export function page(result, start, limit, features = {}) {
     const rows = Array.isArray(result) ? result : result.Items || [];
     const total = Number.isSafeInteger(result.TotalRecordCount) ? result.TotalRecordCount : null;
     const exhausted = total !== null ? start + rows.length >= total : rows.length < limit;
-    return { items: rows.filter(row => id(row.Id)).map(item), total: total,
+    return { items: rows.filter(row => id(row.Id)).map(row => item(row, features)), total: total,
         exhausted: exhausted, cursor: exhausted ? null : String(start + rows.length) };
 }
 

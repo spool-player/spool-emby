@@ -10,6 +10,10 @@ import { translate } from '../logic/events.mjs';
 import { canCopySource, deviceProfile, maxBitrate, maxHeight } from '../logic/profile.mjs';
 import { item } from '../logic/items.mjs';
 
+import { catalogueContracts } from './catalogue.mjs';
+import { settingsContracts } from './settings.mjs';
+import { remoteContracts } from './remote.mjs';
+import { connectContracts } from './connect.mjs';
 let step = 'start';
 function check(value, message) {
     if (!value)
@@ -48,8 +52,109 @@ function server(routes) {
     };
 }
 
-function account(user, token) {
-    return createSource({ server: 'https://media.example', userId: user, token: token }, { device: device });
+function account(user, token, extensions) {
+    const host = { device: device };
+    if (extensions !== undefined)
+        host.extensions = extensions;
+    return createSource({ server: 'https://media.example', userId: user, token: token }, host);
+}
+
+function extensionCompatibility() {
+    step = 'optional extensions and legacy artwork';
+    const legacy = account('ua', 'token');
+    const declared = { 'spool.artwork-owners': 1, 'spool.speed-test': 1, 'spool.lan-probe': 1,
+        'spool.suggestions': 1, 'spool.item-actions': 1, 'spool.collection-editing': 1,
+        'spool.playback-queue-reporting': 1, 'spool.playback-preferences': 1, 'spool.settings-storage': 1,
+        'spool.remote-targets': 1 };
+    const current = account('ua', 'token', declared);
+    const wrong = account('ua', 'token', { 'spool.artwork-owners': 2, 'spool.speed-test': '1', 'future.feature': 1 });
+    check(Object.keys(legacy.describe().extensions).length === 0
+        && Object.keys(declared).every(id => legacy.extensionStatus().missingHost.indexOf(id) >= 0),
+        'absent host extensions require an update regardless of device version');
+    check(Object.keys(wrong.extensionStatus().enabled).length === 0, 'only exact supported wire majors enable features');
+    check(current.describe().extensions['spool.artwork-owners'] === 1
+        && current.extensionStatus().enabled['spool.speed-test'] === 1
+        && current.extensionStatus().missingHost.length === 0, 'supported declarations become account offers');
+    const raw = { Id: 'episode', Type: 'Episode', SeriesId: 'series', SeriesPrimaryImageTag: 'series-poster',
+        AlbumId: 'album', AlbumPrimaryImageTag: 'album-poster', ImageTags: { Primary: 'own-poster' },
+        ParentThumbItemId: 'season', ParentThumbImageTag: 'parent-thumb',
+        ParentBackdropItemId: 'series', ParentBackdropImageTags: ['parent-backdrop'] };
+    const fixture = server({ 'GET /Users/ua/Items': { Items: [raw], TotalRecordCount: 1 },
+        'GET /Users/ua/Items/episode': raw });
+    let probes = 0;
+    fixture.host.speedTest = options => {
+        ++probes;
+        check(options.url === 'https://media.example/emby/Playback/BitrateTest?Size={bytes}&_={nonce}'
+            && options.headers['X-Emby-Token'] === 'token', 'negotiated probes preserve authenticated Emby endpoint');
+        return Promise.resolve({ bitrate: 36000000, parallelRequests: 2 });
+    };
+    return fails(() => legacy.speedTest({}, fixture.host), 'unsupported_extension')
+        .then(() => fails(() => wrong.speedTest({}, fixture.host), 'unsupported_extension')).then(() => {
+            check(fixture.calls.length === 0 && probes === 0, 'unsupported speed tests fail before HTTP or native probes');
+            return current.speedTest({}, fixture.host);
+        }).then(() => Promise.all([legacy.browse({ limit: 5 }, fixture.host), current.browse({ limit: 5 }, fixture.host),
+            legacy.details({ itemId: 'episode' }, fixture.host), current.details({ itemId: 'episode' }, fixture.host)]))
+        .then(results => {
+            for (const row of [results[0].items[0], results[2].item]) {
+                check(!row.thumbTag && !row.backdropTag && !row.thumbItemId && !row.backdropItemId,
+                    'legacy pages and details never attach inherited images to the child');
+                check(row.posterTag === 'own-poster' && row.seriesPosterTag === 'series-poster'
+                    && row.albumPosterTag === 'album-poster', 'own images and baseline poster fallbacks remain');
+            }
+            for (const row of [results[1].items[0], results[3].item])
+                check(row.thumbItemId === 'season' && row.thumbTag === 'parent-thumb'
+                    && row.backdropItemId === 'series' && row.backdropTag === 'parent-backdrop',
+                    'each source applies its own negotiated artwork options');
+        });
+}
+
+function lanDiscovery() {
+    step = 'consented local discovery';
+    const source = createSource({}, { device: device, extensions: { 'spool.lan-probe': 1 } });
+    const response = (id, overrides) => ({ origin: 'http://127.0.0.1:8096', status: 200,
+        body: JSON.stringify(Object.assign({ Id: id, ServerName: 'Local server', Version: '4.8.0',
+            ProductName: 'Emby Server', LocalAddress: 'http://untrusted.example' }, overrides || {})) });
+    const pages = [
+        { responses: [response('one'), response('one'), response('foreign', { ProductName: 'Jellyfin' }),
+            response('invalid', { ServerName: 42 }), response('', {}),
+            { origin: 'http://127.0.0.1:8096', status: 200, body: 'not json' },
+            Object.assign(response('redirect'), { status: 302 })], cursor: 'opaque:next', exhausted: false },
+        { responses: [response('one'), response('two')], cursor: null, exhausted: true },
+        { responses: [response('one')], cursor: null, exhausted: true }
+    ];
+    let calls = 0;
+    const host = { probeLocalHttp: options => {
+        check(options.port === 8096 && options.path === '/emby/System/Info/Public' && options.limit === 32,
+            'bounded public-info discovery uses the unauthenticated native probe');
+        check(calls === 1 ? options.cursor === 'opaque:next' : options.cursor === undefined,
+            'opaque continuation is forwarded; fresh searches do not carry a cursor');
+        return Promise.resolve(pages[calls++]);
+    } };
+    return fails(() => createSource({}, { device: device }).discoverMore({}, host), 'unsupported_extension')
+        .then(() => fails(() => createSource({}, { extensions: { 'spool.lan-probe': 2 } }).discoverMore({}, host),
+            'unsupported_extension'))
+        .then(() => fails(() => source.discoverMore({}, {}), 'unsupported_extension'))
+        .then(() => {
+            check(calls === 0, 'old hosts cannot start local probing');
+            return source.discoverMore({}, host);
+        }).then(first => {
+            check(first.servers.length === 1 && first.servers[0].id === 'one'
+                && first.servers[0].address === 'http://127.0.0.1:8096'
+                && first.cursor === 'opaque:next' && first.exhausted === false,
+                'only validated Emby public info is offered, using the probed origin rather than advertised URLs');
+            return source.discoverMore({ cursor: first.cursor }, host);
+        }).then(second => {
+            check(second.servers.length === 1 && second.servers[0].id === 'two'
+                && second.cursor === null && second.exhausted === true,
+                'duplicate server IDs across pages are omitted without losing terminal state');
+            return source.discoverMore({}, host);
+        }).then(restarted => {
+            check(restarted.servers.length === 1 && restarted.servers[0].id === 'one', 'fresh scans reset seen IDs');
+            return source.discoverMore({}, { probeLocalHttp: () =>
+                Promise.resolve({ responses: [], cursor: null, exhausted: true }) });
+        })
+        .then(empty => check(empty.servers.length === 0 && empty.exhausted === true,
+            'no local interfaces leaves an empty completed search'));
 }
 
 export function run() {
@@ -57,19 +162,19 @@ export function run() {
     const inherited = { Id: 'episode', Type: 'Episode', SeriesId: 'series',
         ParentBackdropItemId: 'series', ParentBackdropImageTags: ['series-backdrop'],
         ParentThumbItemId: 'season', ParentThumbImageTag: 'season-thumb' };
-    const inheritedImages = item(inherited);
+    const inheritedImages = item(inherited, { artworkOwners: true });
     check(inheritedImages.backdropItemId === 'series' && inheritedImages.backdropTag === 'series-backdrop'
         && inheritedImages.thumbItemId === 'season' && inheritedImages.thumbTag === 'season-thumb',
         'inherited thumbnail and backdrop keep their distinct owners');
     const ownImages = item(Object.assign({}, inherited, { ImageTags: { Thumb: 'own-thumb' },
-        BackdropImageTags: ['own-backdrop'] }));
+        BackdropImageTags: ['own-backdrop'] }), { artworkOwners: true });
     check(!ownImages.thumbItemId && !ownImages.backdropItemId && ownImages.thumbTag === 'own-thumb'
         && ownImages.backdropTag === 'own-backdrop', 'own images never inherit a parent owner');
     const ownerless = item({ Id: 'episode', ParentThumbImageTag: 'unknown',
-        ParentBackdropImageTags: ['unknown'] });
+        ParentBackdropImageTags: ['unknown'] }, { artworkOwners: true });
     check(!ownerless.thumbTag && !ownerless.backdropTag, 'unknown parent ownership cannot create a child image URL');
     step = 'server address';
-    check(normalizeServer('emby.local') === 'http://emby.local:8096', 'a bare host gets the default port');
+    check(normalizeServer('emby.local') === 'https://emby.local', 'a bare DNS host tries HTTPS first');
     check(normalizeServer('https://emby.example/emby/') === 'https://emby.example', 'the /emby suffix goes');
     check(normalizeServer('http://emby.local:9000') === 'http://emby.local:9000', 'an explicit port stays');
     check(normalizeServer('[::1]') === 'http://[::1]:8096', 'IPv6 gets the default port');
@@ -102,6 +207,8 @@ export function run() {
     const emby = server({
         'GET /Users/ua/Items': () => respond({ TotalRecordCount: 3, Items: [film] }),
         'GET /Users/ub/Items': () => respond({ TotalRecordCount: 3, Items: [film] }),
+        'GET /Users/ua': { Policy: { EnableContentDeletion: true } },
+        'GET /Users/ua/Items/list-1': { Id: 'list-1', Type: 'Playlist', CanEditItems: true },
         'GET /Users/ua/Items/Latest': [film, { Id: 42, Name: 'Show', Type: 'Series' }],
         'GET /Users/ua/Items/film': film,
         'GET /Users/ua/Views': { Items: [{ Id: 'movies', Name: 'Movies', CollectionType: 'movies',
@@ -120,8 +227,8 @@ export function run() {
         'POST /Sessions/Playing': {}
     });
 
-    step = 'search';
-    return Promise.all([a.search({ query: 'Film', limit: 1 }, emby.host), b.search({ query: 'Film', limit: 1 }, emby.host)])
+    step = 'browse';
+    return Promise.all([a.browse({ limit: 1 }, emby.host), b.browse({ limit: 1 }, emby.host)])
         .then(pages => {
             const page = pages[0];
             check(page.total === 3 && !page.exhausted && page.cursor === '1', 'paging from TotalRecordCount');
@@ -132,11 +239,10 @@ export function run() {
                 'each account sends its own token');
             check(first['X-Emby-Authorization'].indexOf('Device="Living Room"') >= 0,
                 'header values cannot break out of quotes');
-            check(emby.calls[0].url.indexOf('SearchTerm=Film') > 0 && emby.calls[0].url.indexOf('Limit=1') > 0, 'query');
-            return a.search({ query: 'Film', limit: 1, cursor: page.cursor }, emby.host);
+            return a.browse({ limit: 1, cursor: page.cursor }, emby.host);
         }).then(() => {
             check(emby.calls[emby.calls.length - 1].url.indexOf('StartIndex=1') > 0, 'the cursor is the next offset');
-            return fails(() => a.search({ query: 'x', cursor: '../1' }, emby.host), 'invalid_cursor');
+            return fails(() => a.browse({ cursor: '../1' }, emby.host), 'invalid_cursor');
         }).then(() => {
             step = 'lists';
             return a.latest({ limit: 5 }, emby.host);
@@ -234,7 +340,7 @@ export function run() {
                     : respond({}, 401)
             });
             return login.probe({ server: 'emby.local' }, setup.host).then(found => {
-                check(found.server === 'http://emby.local:8096' && found.name === 'Home', 'probe finds the server');
+                check(found.server === 'https://emby.local' && found.name === 'Home', 'probe finds the server');
                 check(found.users[0].hasPassword === false, 'public users');
                 check(!setup.calls[0].options.headers['X-Emby-Token'], 'no token before sign-in');
                 return fails(() => login.authenticate({ server: 'emby.local', username: 'Ann', password: 'wrong' },
@@ -244,7 +350,7 @@ export function run() {
                     check(result.account === 'u1@server-id' && result.group === 'server-id', 'account identity');
                     check(result.label === 'Ann' && result.detail === 'Home', 'account label');
                     check(result.configuration.token === 'new-token'
-                        && result.configuration.server === 'http://emby.local:8096', 'configuration');
+                        && result.configuration.server === 'https://emby.local', 'configuration');
                     const jellyfin = server({ 'GET /System/Info/Public': { Id: 'j', ProductName: 'Jellyfin Server' } });
                     return fails(() => login.probe({ server: 'jf.local' }, jellyfin.host), 'not_emby');
                 });
@@ -264,7 +370,8 @@ export function run() {
             check(events[2][1].itemIds[0] === '7' && events[2][1].mode === 'next', 'remote play');
             check(events[3][0] === 'changed' && events[3][1].itemId === 'film', 'user data changes');
             check(events[4][0] === 'changed', 'library changes');
-        }).then(qualityContract);
+        }).then(qualityContract).then(baselineRepairs).then(extensionCompatibility).then(lanDiscovery)
+        .then(catalogueContracts).then(() => settingsContracts(true)).then(() => remoteContracts(true)).then(connectContracts);
 }
 
 function qualityContract() {
@@ -370,5 +477,86 @@ function qualityContract() {
             && c.url.indexOf('PlaySessionId=quality-session') > 0), 'stopping frees the session encoder');
         check(requests.calls.some(c => c.path === '/LiveStreams/Close' && c.url.indexOf('LiveStreamId=live-1') > 0),
             'stopping closes a live source opened during negotiation');
+    });
+}
+
+function baselineRepairs() {
+    step = 'exact positions and playlist entries';
+    const entries = [0, 'opaque/second:entry'].map(entry => item({ Id: 'film', PlaylistItemId: entry }));
+    check(entries[0].id === entries[1].id && entries[0].entryId === '0'
+        && entries[1].entryId === 'opaque/second:entry', 'duplicate media occurrences keep separate opaque entry IDs');
+    check(item({ Id: 'film' }).entryId === undefined, 'ordinary media has no invented entry ID');
+    const source = account('ua', 'token');
+    const fixture = server({
+        'GET /Users/ua/Items/film': { Id: 'film', Type: 'Movie' },
+        'POST /Items/film/PlaybackInfo': { MediaSources: [{ Id: 'edition', SupportsDirectPlay: true,
+            Container: 'mp4', Bitrate: 1000, MediaStreams: [{ Type: 'Video', Codec: 'h264', Height: 720 }] }] },
+        'POST /Sessions/Playing': {},
+        'POST /Sessions/Playing/Progress': {},
+        'POST /Sessions/Playing/Stopped': {},
+        'POST /Users/ua/Items/film/UserData': {}
+    });
+    const decimal = '9007199254740993';
+    return source.resolve({ itemId: 'film', positionTicks: decimal, subtitleStreamIndex: -1 }, fixture.host).then(() => {
+        const call = fixture.calls.find(c => c.path === '/Items/film/PlaybackInfo');
+        check(call.options.body.indexOf('"StartTimeTicks":' + decimal + ',') >= 0,
+            'resolve sends an exact unquoted decimal above the safe integer limit');
+        check(call.body.SubtitleStreamIndex === -1, 'resolve preserves subtitle Off');
+        return ['start', 'progress', 'stop'].reduce((pending, event) => pending.then(() =>
+            source.report({ event: event, itemId: 'film"\\\n', positionTicks: decimal, subtitleStreamIndex: -1 },
+                fixture.host).then(() => {
+                const call = fixture.calls[fixture.calls.length - 1];
+                check(call.options.body.indexOf('"PositionTicks":' + decimal + ',') >= 0,
+                    event + ' sends exact decimal ticks');
+                check(call.body.ItemId === 'film"\\\n' && call.body.SubtitleStreamIndex === -1,
+                    'ordinary strings retain JSON escaping and subtitle Off remains -1');
+            })), Promise.resolve());
+    }).then(() => source.progress({ itemId: 'film', positionTicks: '9223372036854775807' }, fixture.host)).then(() => {
+        check(fixture.calls[fixture.calls.length - 1].options.body === '{"PlaybackPositionTicks":9223372036854775807}',
+            'progress preserves the int64 upper boundary');
+        return source.progress({ itemId: 'film', positionTicks: '-9223372036854775808' }, fixture.host);
+    }).then(() => {
+        check(fixture.calls[fixture.calls.length - 1].options.body === '{"PlaybackPositionTicks":-9223372036854775808}',
+            'signed int64 lower boundary is encoded exactly');
+        const count = fixture.calls.length;
+        return ['', '1.5', '1e3', ' 1', '+1', '01', '9223372036854775808', '-9223372036854775809',
+            '0,"injected":true', null, 9007199254740992].reduce((pending, invalid) => pending.then(() =>
+            fails(() => source.resolve({ itemId: 'film', positionTicks: invalid, unlimitedLocalNetwork: true }, fixture.host),
+                'invalid_position')
+                .then(() => fails(() => source.report({ event: 'start', itemId: 'film', positionTicks: invalid },
+                    fixture.host), 'invalid_position'))
+                .then(() => fails(() => source.progress({ itemId: 'film', positionTicks: invalid }, fixture.host),
+                    'invalid_position'))), Promise.resolve()).then(() =>
+            check(fixture.calls.length === count, 'invalid positions fail before any metadata, LAN, or playback HTTP'));
+    }).then(() => {
+        step = 'discovery addresses';
+        const source = createSource({}, { device: device });
+        const candidates = input => source.serverCandidates({ server: input }).servers.join('|');
+        check(candidates('media.example/base/emby') === 'https://media.example/base|http://media.example:8096/base|http://media.example/base',
+            'DNS fallback preserves the reverse-proxy path');
+        check(candidates('media.example:9000/base') === 'https://media.example:9000/base|http://media.example:9000/base',
+            'a supplied port is never substituted');
+        check(candidates('192.168.1.2/base') === 'http://192.168.1.2:8096/base|https://192.168.1.2/base|http://192.168.1.2/base',
+            'private literals try the native HTTP port first');
+        check(candidates('localhost') === 'http://localhost:8096|https://localhost|http://localhost',
+            'localhost follows the private-address order');
+        check(candidates('https://media.example:9443/base') === 'https://media.example:9443/base',
+            'explicit HTTPS cannot downgrade');
+        check(candidates('http://media.example/base') === 'http://media.example/base',
+            'explicit HTTP keeps its default port and path');
+        return source.discover({}, { discover: () => Promise.resolve([
+            { address: '192.168.1.3', text: JSON.stringify({ Id: 'ip', Address: 'https://10.0.0.2:9443/base/emby' }) },
+            { address: '192.168.1.3', text: JSON.stringify({ Id: 'dns', Address: 'https://media.example:9443/base' }) },
+            { address: 'fd00::3', text: JSON.stringify({ Id: 'ipv6', Address: 'http://[fd00::2]:8096/base' }) },
+            { address: '192.168.1.3', text: JSON.stringify({ Id: 'unsafe', Address: 'https://name:password@server' }) }
+        ]) }).then(result => {
+            check(result.servers.find(s => s.id === 'ip').address === 'https://192.168.1.3:9443/base/emby',
+                'UDP sender replaces a literal while preserving scheme, port and base path');
+            check(result.servers.find(s => s.id === 'dns').address === 'https://media.example:9443/base',
+                'UDP sender never replaces a DNS name');
+            check(result.servers.find(s => s.id === 'ipv6').address === 'http://[fd00::3]:8096/base',
+                'IPv6 UDP senders remain bracketed');
+            check(!result.servers.some(s => s.id === 'unsafe'), 'unsafe announcements are not offered for origin approval');
+        });
     });
 }
