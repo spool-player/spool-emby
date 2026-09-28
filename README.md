@@ -241,3 +241,7 @@ without it, the store relies on its scheduled refresh. Release publication needs
 the workflow's `contents: write`, `id-token: write`, and `attestations: write` permissions.
 
 MPL-2.0; see LICENSE and NOTICE.
+
+## Service icon
+
+The Emby logo belongs to Emby. Its team permits using the logo to identify connections to Emby servers: https://emby.media/community/topic/50879-logo-usage-guidelines/. The icon identifies the connected service; this is an independent Spool integration, not an official Emby client. See [asset attribution](assets/BRANDING.md).

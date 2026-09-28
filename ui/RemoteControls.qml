@@ -24,24 +24,29 @@ FocusScope {
     function refresh() {
         busy = true
         problem = ""
-        provider.request("remoteControls", { "targetId": targetId }).then(result => {
-            controls = result.controls || []
-            textAvailable = result.text === true
-            messageAvailable = result.message === true
-            busy = false
-            Qt.callLater(focusFirst)
-        }, () => {
-            busy = false
-            problem = "The target's advanced controls are unavailable. Refresh to try again."
-            Qt.callLater(() => InputKeys.focus(refreshButton))
-        })
+        provider.request("remoteControls", {
+                             "targetId": targetId
+                         }).then(result => {
+                             controls = result.controls || []
+                             textAvailable = result.text === true
+                             messageAvailable = result.message === true
+                             busy = false
+                             Qt.callLater(focusFirst)
+                         }, () => {
+                             busy = false
+                             problem = "The target's advanced controls are unavailable. Refresh to try again."
+                             Qt.callLater(() => InputKeys.focus(refreshButton))
+                         })
     }
     function send(name, value) {
         if (busy)
             return
         busy = true
         problem = ""
-        const args = { "targetId": targetId, "name": name }
+        const args = {
+            "targetId": targetId,
+            "name": name
+        }
         if (value !== undefined)
             args.value = value
         provider.request("remoteControl", args).then(() => {
@@ -58,8 +63,8 @@ FocusScope {
         spacing: Metrics.scaled(12)
         AppText {
             Layout.fillWidth: true
-            text: "Advanced remote controls"
-            font.pixelSize: Metrics.titleSizePx
+            text: "Device controls"
+            font.pixelSize: Metrics.bodySizePx + Metrics.scaled(2)
             font.weight: Font.DemiBold
         }
         SecondaryText {
