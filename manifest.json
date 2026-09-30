@@ -17,8 +17,7 @@
   "origins": ["https://connect.emby.media"],
   "ui": {
     "login": "ui/Login.qml",
-    "picker": "ui/Picker.qml",
-    "settings": "ui/Settings.qml"
+    "picker": "ui/Picker.qml"
   },
   "actions": [
     {"id": "playlist", "label": "Add to playlist", "icon": "playlist_add",

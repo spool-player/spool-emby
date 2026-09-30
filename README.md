@@ -15,9 +15,8 @@ Spool.
 | `logic/settings.mjs` | Optional native preferences and application-owned DisplayPreferences documents |
 | `logic/remote.mjs` | Negotiated outbound session control and occurrence-aware remote queues |
 | `logic/connect.mjs`, `logic/connect-flow.mjs` | Emby Connect transport and transient login-screen state |
-| `ui/Login.qml` | Network/manual server and password sign-in, or Emby Connect PIN and membership selection |
-| `ui/Picker.qml` | Choosing a playlist or collection, renaming, confirming a delete |
-| `ui/RemoteControls.qml` | Capability-gated navigation, text and service controls for the selected peer |
+| `ui/Login.qml` | Emby Connect adapter and service labels for Spool's compiled login/linking surfaces |
+| `ui/Picker.qml` | Service command mappings for compiled item pickers and device controls |
 
 Several users and several servers can be signed in at once. Users of the same server are alternatives
 to each other in Spool; different servers are shown together. Watching together is not supported.
@@ -59,9 +58,9 @@ inherited thumbnail/backdrop ownership and `spool.speed-test` for native through
 probes. API 0.2 hosts without these extensions retain baseline login, browsing,
 playback and reporting. They receive own images and baseline series/album poster
 fallbacks, but no inherited thumbnail/backdrop tags that could target the wrong ID.
-Speed testing is no longer a legacy capability. Login, settings and item pickers
-use baseline `extensionStatus` to show “Update Spool to use all features of this
-provider.” only when host support is missing, not for server permission failures.
+Speed testing is no longer a legacy capability. Compiled login and item pickers
+use the context's `missingHostExtensions` to show “Update Spool to use all features
+of this provider.” only for missing optional host support, not server permission failures.
 
 Playlist rows also preserve `PlaylistItemId` as an opaque `entryId`, so repeated
 occurrences of the same media item remain distinguishable.
@@ -181,9 +180,13 @@ Protocol references:
 [`MediaSourceInfo`](https://github.com/MediaBrowser/Emby.ApiClients/blob/master/Clients/JavaScript/src/model/MediaSourceInfo.js),
 and Emby's [official JavaScript client](https://github.com/MediaBrowser/Emby.ApiClient.Javascript/blob/master/apiclient.js).
 
-The provider owns both QML screens. Login supports discovered servers, HTTP(S) reverse-proxy paths,
-IPv6 addresses, public profiles and manual usernames. Credentials are kept in the account configuration,
-never in artwork or probe URLs. Emby Connect is not needed for direct server sign-in.
+The provider's thin QML adapters use Spool's precompiled login, linking, picker and
+device-control surfaces; they require the matching host build. Only the Emby Connect
+flow remains service-specific. Playback/appearance settings live in Spool, without a
+redundant provider settings page. Login supports discovered servers, HTTP(S) reverse-proxy
+paths, IPv6 addresses, public profiles and manual usernames. Credentials are kept in
+the account configuration, never in artwork or probe URLs. Emby Connect is not needed
+for direct server sign-in.
 Bare DNS addresses try HTTPS first, then HTTP on port 8096 and the default HTTP
 port. Private literals and localhost try HTTP 8096 first. Supplied ports and proxy
 paths are preserved; an explicit scheme selects only that address and HTTPS is
