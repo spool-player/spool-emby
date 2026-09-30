@@ -44,7 +44,8 @@ ServerLogin {
             instructions: state.phase === "members" ? (connections.length
                                                        ? "Choose a server connection. Only the address you choose will be approved." :
                                                          "No server memberships are available for this Emby Connect account.") :
-                                                      "Open emby.media/pin on another device and enter this code."
+                                                      typeof linkUrl === "string" ? "" :
+                                                                                    "Open emby.media/pin on another device and enter this code."
             error: ({
                         connect_expired: "This code has expired. Get a new code to try again.",
                         connect_server_mismatch: "This address belongs to a different server. No account was added.",
@@ -55,6 +56,9 @@ ServerLogin {
             onBackRequested: root.back()
             onChoiceSelected: index => flow.select(connections[index].member, connections[index].connection)
             Component.onCompleted: {
+                // Link-aware Spool builds show the address as a link.
+                if (typeof linkUrl === "string")
+                    linkUrl = "https://emby.media/pin"
                 flow = ConnectFlow.createConnectFlow({
                                                          request: (operation, args) => provider.request(operation, args),
                                                          approve: address => provider.allowOrigin(address),
