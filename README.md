@@ -214,7 +214,8 @@ cmake -S sdk -B build/sdk -G Ninja && cmake --build build/sdk
 timeout 20s build/sdk/provider-contract-runner tests/contract.mjs
 QV4_FORCE_INTERPRETER=1 timeout 20s build/sdk/provider-contract-runner tests/contract.mjs
 python3 sdk/spool-provider.py build .          # dist/spool.emby-<version>.tar.zst
-python3 sdk/spool-provider.py validate dist/*.tar.zst
+VERSION=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+python3 sdk/spool-provider.py validate "dist/spool.emby-$VERSION.tar.zst"
 ```
 
 To try a checkout in Spool without releasing it, configure Spool with
@@ -227,13 +228,17 @@ It does not replace a smoke run against an authorized Emby server or an offscree
 
 ## Releasing
 
+Current release: **0.1.4**, retaining compiled host sign-in forms and the
+Emby Connect PIN link from 0.1.3.
+
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
-For the initial `0.1.0` release, after validation:
+After validation, use the version in the current manifest:
 
 ```sh
 git push -u origin main
-git tag v0.1.0
-git push origin v0.1.0
+VERSION=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
+git tag "v$VERSION"
+git push origin "v$VERSION"
 ```
 
 `.github/workflows/release.yml` runs both Qt contract modes, verifies the SDK, builds and validates

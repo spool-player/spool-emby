@@ -3,7 +3,7 @@
   "api": "0.2",
   "id": "spool.emby",
   "name": "Emby",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "publisher": "Spool",
   "summary": "Your Emby server",
   "homepage": "https://github.com/spool-player/spool-emby",
