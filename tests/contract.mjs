@@ -157,6 +157,48 @@ function lanDiscovery() {
             'no local interfaces leaves an empty completed search'));
 }
 
+function previewContracts() {
+    step = 'item-scoped Emby BIF descriptors';
+    let thumbnails = { AspectRatio: 16 / 9, Thumbnails: [{ PositionTicks: 0, ImageTag: 'first' }] };
+    let metadata = { Id: 'film', MediaSources: [{ Id: 'film' }, { Id: 'alternate' }] };
+    const fixture = server({
+        'POST /Items/film/PlaybackInfo': { MediaSources: ['film', 'alternate'].map(Id => ({ Id: Id, SupportsDirectPlay: true })) },
+        'GET /Users/ua/Items/film': () => respond(metadata),
+        'GET /Items/film/ThumbnailSet': call => {
+            check(call.url.indexOf('Width=320') > 0, 'thumbnail discovery specifies the requested width');
+            check(call.options.headers['X-Emby-Token'] === 'preview-token',
+                'thumbnail availability discovery is account-authenticated');
+            return thumbnails ? respond(thumbnails) : respond({}, 404);
+        }
+    });
+    const source = account('ua', 'preview-token');
+    const resolve = variantId => source.resolve({ itemId: 'film', variantId: variantId, positionTicks: '0' }, fixture.host);
+    return resolve('film').then(result => {
+        check(result.trickplay.format === 'bif'
+            && result.trickplay.url === 'https://media.example/emby/Videos/film/index.bif?Width=320',
+            'available item thumbnails resolve the documented whole BIF endpoint');
+        check(result.trickplay.headers['X-Emby-Token'] === 'preview-token'
+            && result.trickplay.url.indexOf('preview-token') < 0, 'BIF authorization never enters the URL');
+        return resolve('alternate');
+    }).then(result => {
+        check(result.trickplay === undefined && result.playMethod === 'DirectPlay',
+            'an alternate version cannot use a different item-scoped index');
+        metadata = { Id: 'another-item', MediaSources: [{ Id: 'film' }] };
+        return resolve('film');
+    }).then(result => {
+        check(result.trickplay === undefined && result.playMethod === 'DirectPlay',
+            'mismatched item metadata cannot redirect the selected item index');
+        metadata = { Id: 'film', MediaSources: [{ Id: 'film' }] };
+        thumbnails = { Thumbnails: [] };
+        return resolve('film');
+    }).then(result => {
+        check(result.trickplay === undefined && result.playMethod === 'DirectPlay', 'empty indexes do not fail playback');
+        thumbnails = null;
+        return resolve('film');
+    }).then(result => check(result.trickplay === undefined && result.playMethod === 'DirectPlay',
+        'unsupported thumbnail discovery does not fail playback'));
+}
+
 export function run() {
     step = 'inherited artwork owners';
     const inherited = { Id: 'episode', Type: 'Episode', SeriesId: 'series',
@@ -371,7 +413,7 @@ export function run() {
             check(events[3][0] === 'changed' && events[3][1].itemId === 'film', 'user data changes');
             check(events[4][0] === 'changed', 'library changes');
         }).then(qualityContract).then(baselineRepairs).then(extensionCompatibility).then(lanDiscovery)
-        .then(catalogueContracts).then(() => settingsContracts(true)).then(() => remoteContracts(true)).then(connectContracts);
+        .then(previewContracts).then(catalogueContracts).then(() => settingsContracts(true)).then(() => remoteContracts(true)).then(connectContracts);
 }
 
 function qualityContract() {

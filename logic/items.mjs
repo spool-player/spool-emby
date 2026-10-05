@@ -124,3 +124,18 @@ export function segments(raw) {
         result.push({ type: 'Outro', startTicks: credits, endTicks: runtime });
     return result;
 }
+
+// Emby's documented BIF endpoints are item-scoped, with no media-source selector.
+// An alternate version cannot borrow the requested item's index.
+export function trickplay(raw, variantId, thumbnails, server, headers) {
+    const sources = raw && raw.MediaSources || [];
+    const itemId = id(raw && raw.Id);
+    const selected = id(variantId);
+    const belongs = itemId && selected && (selected === itemId
+        || sources.length === 1 && id(sources[0].Id) === selected);
+    if (!belongs || !thumbnails
+        || !Array.isArray(thumbnails.Thumbnails) || !thumbnails.Thumbnails.length)
+        return undefined;
+    return { format: 'bif', url: server + '/emby/Videos/' + encodeURIComponent(itemId) + '/index.bif?Width=320',
+        headers: headers };
+}

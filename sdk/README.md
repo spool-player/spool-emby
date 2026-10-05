@@ -63,7 +63,7 @@ no Node or browser globals, and Qt's engine lacks some newer built-ins such as `
 
 | Limit | |
 | --- | --- |
-| Uninterrupted script | 500 ms; exceeding it turns the module off until restarted |
+| Uninterrupted script | 500 ms (worker CPU time on Windows, excluding loader I/O and descheduling); exceeding it turns the module off until restarted |
 | Operation | settles within 15 s; eight in flight per account |
 | HTTP | four at once per operation, 1 MiB bodies, 8 MiB responses, redirects returned not followed, no cookies |
 | Sockets | `host.socket` on the source host, four per account |
@@ -134,6 +134,18 @@ for Plex, translate bits/second to the server's kbit/second bandwidth setting
 and negotiate whether the selected media can direct play, remux or transcode.
 Never treat a remux preference as permission to exceed a quality ceiling.
 Preserve an explicitly selected edition rather than silently substituting one.
+`Resolved.source` can supply fresh selected-edition bitrate and pixel dimensions
+from playback negotiation. Quality menus use this original analysis rather than
+a stale catalogue summary, a measured automatic limit, or transcoded output.
+
+
+`Resolved.timelineOriginTicks` identifies the source position represented by
+normalized media time zero (zero when omitted). A server-started HLS stream
+that already begins at the resume point must advertise that origin, so Spool
+seeks only the remaining fraction instead of seeking the full resume offset
+again. UI positions, reports, chapters and segment boundaries remain absolute
+source positions. Seeking before the stream origin resolves a fresh stream.
+Direct files and full-timeline streams keep origin zero.
 
 A source-only service need not expose a transcoder. A future Stremio-style
 provider can use the same context to select among known stream variants and
@@ -161,6 +173,21 @@ Spool scopes these opaque IDs to the account and preserves them in cached
 media rows; home cards and details request the image from that owner.
 Do not attach a parent's tag to a child without its owner ID. Series posters
 and album covers retain their existing `seriesId`/`albumId` ownership.
+
+## Seek previews
+
+Return `resolve().trickplay` for the selected media variant, not a global URL
+template in `describe()`. Sprite sheets use
+`{width, height, columns, rows, count, intervalMs, urlTemplate}`; the absolute
+HTTP(S) template has one `{index}` substitution. BIF sequences use
+`{format: "bif", url}` with optional `width`/`height`. Pass the whole sequence
+URL, not individual JPEGs: C++ parses its timestamp/offset index and decodes
+the selected frame. Missing server-generated previews mean omit `trickplay`.
+
+Both formats use the account's `resolve().headers`; keep tokens out of URLs.
+The native loader prefetches the resume preview, caches bounded preview data
+separately from posters, and uploads only the requested frame. While loading
+or on failure, the player shows no preview frame or black placeholder.
 
 ## Screens
 
@@ -282,6 +309,14 @@ Mixed audio/video queues cannot be represented by one PMS queue. Bulk append
 is verified against count/order and occurrence IDs, with read-back before
 reconciliation after uncertain mutations; fixture success is not a live-server
 compatibility guarantee.
+
+Protected `spool.remote-targets` state uses the same sheet/BIF descriptor in
+`preview`, with an optional `headers` map. Use the same account/device
+authorization as media requests; never put tokens in preview query strings.
+The host keeps headers out of QML, validates the approved HTTP(S) origin and
+numeric `{index}` substitution, and decodes previews through the dedicated
+native loader. Authenticated previews bypass URL-only disk caching and cookies,
+reject foreign-origin redirects, and keep cached data isolated by session.
 
 ### Native preferences and application data
 

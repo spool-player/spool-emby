@@ -41,10 +41,9 @@ export function remoteContracts(emby = false) {
     let queueReads = 0;
     let metadataReads = 0;
     let replacementCount = 0;
+    let mediaSourceId = 'variant';
     const metadata = id => ({ Id: id, Name: id === 'film' ? 'A film' : id, Type: 'Movie',
-        MediaSources: [{ Id: 'variant', MediaStreams: streams }],
-        Trickplay: { variant: { 320: { Width: 320, Height: 180, TileWidth: 5, TileHeight: 5,
-            ThumbnailCount: 100, Interval: 1000 } } } });
+        MediaSources: [{ Id: mediaSourceId, MediaStreams: streams }] });
     function target() {
         const raw = { Id: 'target', DeviceId: 'peer', DeviceName: 'Living room', Client: 'Client', UserName: 'Viewer',
             PlayState: playing, PlaylistIndex: current, PlaylistLength: entries.length,
@@ -107,6 +106,11 @@ export function remoteContracts(emby = false) {
             }
             if (path.indexOf('/Users/u/Items/') === 0)
                 return response(metadata(decodeURIComponent(path.slice('/Users/u/Items/'.length))));
+            if (/^\/Items\/[^/]+\/ThumbnailSet$/.test(path)) {
+                check(query.Width === '320' && options.headers['X-Emby-Token'] === 'account-token',
+                    'remote thumbnail discovery uses the requested width and account authentication');
+                return response({ Thumbnails: [{ PositionTicks: 0, ImageTag: 'first' }] });
+            }
             if (path === '/Sessions/target/Playing') {
                 check(!pending, 'mutations are not blindly repeated');
                 ++replacementCount;
@@ -153,8 +157,23 @@ export function remoteContracts(emby = false) {
             && state.commandSequence === undefined, 'unknown values, queue revisions and acknowledgements remain absent');
         check(state.audioTracks[0].id === '2' && state.audioTracks[0].selected
             && state.subtitleTracks[0].id === '7' && !state.subtitleTracks[0].selected, 'tracks use native stream indices and Off remains unselected');
-        check(emby ? state.preview === undefined : state.preview.columns === 5 && state.preview.urlTemplate.indexOf('/film/Trickplay/320/{index}.jpg') >= 0,
-            'Jellyfin tiles bind the playing item and selected variant only');
+        check(state.preview.format === 'bif'
+            && state.preview.url === 'https://media.example/base/emby/Videos/film/index.bif?Width=320'
+            && state.preview.headers['X-Emby-Token'] === 'account-token',
+            'remote previews use the known playing item and account-scoped BIF credentials');
+        playing.MediaSourceId = 'unknown-version';
+        return source.remoteState({ targetId: 'target' }, host);
+    }).then(state => {
+        check(state.preview === undefined, 'unknown remote versions never borrow the item index');
+        playing.MediaSourceId = undefined;
+        mediaSourceId = undefined;
+        return source.remoteState({ targetId: 'target' }, host);
+    }).then(state => {
+        check(state.preview === undefined, 'missing playing and metadata source IDs never authorize an index');
+        mediaSourceId = 'variant';
+        playing.MediaSourceId = 'variant';
+        return source.remoteState({ targetId: 'target' }, host);
+    }).then(() => {
         return source.remoteQueue({ targetId: 'target', limit: 2 }, host);
     }).then(page => {
         check(page.items.map(row => row.id).join(',') === 'film,film'

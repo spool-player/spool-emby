@@ -125,21 +125,6 @@ export function createRemote(options) {
             .filter(index => index >= 0);
         return matches.length === 1 ? matches[0] : -1;
     }
-    function preview(raw, media) {
-        if (emby || !options.trickplay || !media || !media.Trickplay)
-            return undefined;
-        const variant = identity((raw.PlayState || {}).MediaSourceId);
-        // Do not use a different variant's tile map when the current one is unknown.
-        if (!variant || !media.Trickplay[variant])
-            return undefined;
-        const descriptor = options.trickplay(media, variant);
-        if (!descriptor || !['width', 'height', 'columns', 'rows', 'count', 'intervalMs']
-            .every(key => Number.isSafeInteger(descriptor[key]) && descriptor[key] > 0))
-            return undefined;
-        return Object.assign({}, descriptor, { urlTemplate: server + '/Videos/' + encodeURIComponent(media.Id)
-            + '/Trickplay/' + descriptor.width + '/{index}.jpg?MediaSourceId=' + encodeURIComponent(variant)
-            + '&api_key=' + encodeURIComponent(options.token) });
-    }
     function normalize(raw) {
         const play = raw.PlayState || {};
         const media = raw.NowPlayingItem;
@@ -148,7 +133,7 @@ export function createRemote(options) {
         if (media && identity(media.Id)) {
             result.item = item(media);
             result.runtimeTicks = knownTicks(media.RunTimeTicks);
-            result.preview = preview(raw, media);
+            result.preview = raw.preview;
         }
         result.positionTicks = knownTicks(play.PositionTicks);
         if (typeof play.VolumeLevel === 'number' && Number.isFinite(play.VolumeLevel)
@@ -192,15 +177,20 @@ export function createRemote(options) {
         const key = String(media.Id) + ':' + String((raw.PlayState || {}).MediaSourceId || '');
         let cached = mediaCache.get(id);
         if (!cached || cached.key !== key) {
-            cached = { key: key, pending: request(host, 'GET', userPath('/Items/') + encodeURIComponent(media.Id),
-                { Fields: emby ? 'MediaSources' : 'MediaSources,Trickplay' })
-                .then(details => String(details.Id) === String(media.Id) ? details : {}, () => ({})) };
+            const details = request(host, 'GET', userPath('/Items/') + encodeURIComponent(media.Id),
+                { Fields: 'MediaSources' }).then(details => String(details.Id) === String(media.Id) ? details : {}, () => ({}));
+            const thumbnails = request(host, 'GET', '/Items/' + encodeURIComponent(media.Id) + '/ThumbnailSet', { Width: 320 })
+                .then(value => value, () => null);
+            cached = { key: key, pending: Promise.all([details, thumbnails]).then(([details, thumbnails]) => ({
+                media: details, preview: options.trickplay(details, (raw.PlayState || {}).MediaSourceId,
+                    thumbnails, server, options.previewHeaders())
+            })) };
             mediaCache.set(id, cached);
             if (mediaCache.size > 128)
                 mediaCache.delete(mediaCache.keys().next().value);
         }
         return cached.pending.then(details => Object.assign({}, raw, {
-            NowPlayingItem: Object.assign({}, details, media)
+            NowPlayingItem: Object.assign({}, details.media, media), preview: details.preview
         }));
     }
     function state(host, id) {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Emby for Spool: one source per signed-in user.
 
-import { collectionTypes, detailFields, fields, item as mapItem, page as mapPage, segments, stream } from './items.mjs';
+import { collectionTypes, detailFields, fields, item as mapItem, page as mapPage, segments, stream, trickplay } from './items.mjs';
 import { canCopySource, deviceProfile, maxBitrate } from './profile.mjs';
 import { connect, remoteCommands } from './events.mjs';
 import { tickInteger, wireJson } from './wire.mjs';
@@ -113,7 +113,7 @@ export function createSource(configuration, sourceHost) {
     const catalogue = createCatalogue({ request, list, userPath, segment, extensions, userId, emby: true });
     const settings = createSettings({ request, userPath, extensions, userId, emby: true });
     const remote = createRemote({ request, item, userPath, userId, device, extensions, server, emby: true,
-        emit: sourceHost.emit });
+        trickplay, previewHeaders: () => ({ 'X-Emby-Token': token }), emit: sourceHost.emit });
     const connectLogin = createConnect(device, normalizeServer, headers, info);
 
     function streamUrl(value) {
@@ -361,9 +361,11 @@ export function createSource(configuration, sourceHost) {
                     AllowVideoStreamCopy: !args.forceTranscode, AllowAudioStreamCopy: true
                 }));
             // Item type distinguishes audio, and chapters carry Emby's skip markers.
-            const details = request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })
+            const details = request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters,MediaSources' })
+                .then(raw => raw && String(raw.Id) === args.itemId ? raw : null, () => null);
+            const thumbnails = request(host, 'GET', '/Items/' + segment(args.itemId) + '/ThumbnailSet', { Width: 320 })
                 .then(raw => raw, () => null);
-            return Promise.all([playbackInfo, details, localNetwork]).then(([playback, raw, local]) => {
+            return Promise.all([playbackInfo, details, localNetwork, thumbnails]).then(([playback, raw, local, previews]) => {
                 if (playback.ErrorCode)
                     throw new Error('playback_unavailable');
                 const sources = playback.MediaSources || [];
@@ -402,7 +404,8 @@ export function createSource(configuration, sourceHost) {
                     container: ((playMethod === 'DirectPlay' ? source.Container : source.TranscodingContainer)
                         || source.Container || '').split(',')[0],
                     streams: (source.MediaStreams || []).map(stream),
-                    segments: segments(source.Chapters ? source : raw) };
+                    segments: segments(source.Chapters ? source : raw),
+                    trickplay: trickplay(raw, source.Id, previews, server, { 'X-Emby-Token': token }) };
             });
         },
         segments: (args, host) => request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })

@@ -21,6 +21,25 @@ Spool.
 Several users and several servers can be signed in at once. Users of the same server are alternatives
 to each other in Spool; different servers are shown together. Watching together is not supported.
 
+### Seek previews
+
+Playback results expose available seek thumbnails as `{format: 'bif', url, headers}`.
+Discovery uses Emby's authenticated
+[`/Items/{Id}/ThumbnailSet?Width=320`](https://dev.emby.media/reference/RestAPI/BifService/getItemsByIdThumbnailset.html);
+nonempty thumbnail sets use the whole
+[`/Videos/{Id}/index.bif?Width=320`](https://dev.emby.media/reference/RestAPI/BifService/getVideosByIdIndexBif.html)
+sequence. Spool decodes its timestamps and images natively and caches the sequence
+for subsequent seeks. Empty sets, unsupported endpoints or failed preview loads
+leave previews unavailable without interrupting playback.
+
+These documented endpoints select an **item**, not a `MediaSourceId`. Previews
+are offered only when the known playing source ID identifies that item, or item
+metadata has one source matching the selected ID. Unknown source IDs, mismatched
+item metadata and ambiguous alternate editions do not borrow another index. BIF
+URLs stay on the configured server and contain no token; `X-Emby-Token` remains
+in account-scoped request headers.
+
+
 ### Emby Connect
 
 Choose **Sign in with Emby Connect**, open `emby.media/pin` on another device,
@@ -100,8 +119,9 @@ occurrences retain position; removing the current occurrence selects the nearest
 surviving successor at zero, and an empty queue sends Stop. Paused state is
 restored only after the new queue/current occurrence and position are confirmed.
 Uncertain mutations are not blindly retried. The provider picker exposes only
-advertised navigation, text and service-specific controls. Emby remote previews
-are not advertised.
+advertised navigation, text and service-specific controls. Remote previews use
+the same item-scoped BIF discovery and version restrictions as local playback,
+without changing local playback or transmitting account credentials to the peer.
 
 Protocol references: [sessions](https://dev.emby.media/reference/RestAPI/SessionsService/getSessions.html),
 [play queue](https://dev.emby.media/reference/RestAPI/SessionsService/getSessionsPlayqueue.html),
@@ -228,8 +248,9 @@ It does not replace a smoke run against an authorized Emby server or an offscree
 
 ## Releasing
 
-Current release: **0.1.4**, retaining compiled host sign-in forms and the
-Emby Connect PIN link from 0.1.3.
+Current release: **0.1.5**, adding authenticated, item-scoped BIF seek previews
+for local playback and remote sessions, with native decoding in Spool. Retains
+compiled host sign-in forms and the Emby Connect PIN link from 0.1.3.
 
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
 After validation, use the version in the current manifest:

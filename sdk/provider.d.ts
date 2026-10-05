@@ -126,7 +126,7 @@ export interface BrowseFilters {
     filters?: ('IsPlayed' | 'IsUnplayed' | 'IsFavorite' | 'IsResumable')[];
     genres?: string[]; years?: string[]; officialRatings?: string[]; tags?: string[]; studioIds?: string[];
     seriesStatus?: string[]; videoTypes?: string[]; includeItemTypes?: string[];
-    isHd?: boolean; is4K?: boolean; is3D?: boolean; hasSubtitles?: boolean; hasTrailer?: boolean;
+    isHd?: boolean; is4K?: boolean; is3D?: boolean; isHdr?: boolean; hasSubtitles?: boolean; hasTrailer?: boolean;
     hasSpecialFeature?: boolean; hasThemeSong?: boolean; hasThemeVideo?: boolean; specialEpisode?: boolean;
     isMissing?: boolean; isUnaired?: boolean;
     /** Titles starting with this letter, or '#' for anything before A. */
@@ -170,6 +170,9 @@ export interface Stream {
     title?: string; width?: number; height?: number; frameRate?: number; bitrate?: number; bitDepth?: number;
     channels?: number; sampleRate?: number; range?: string; rangeType?: string;
     default?: boolean; forced?: boolean; external?: boolean; interlaced?: boolean;
+    /** An external subtitle file on the stream's own origin, fetched with its headers.
+     *  External subtitles without one cannot be shown and are left out of the player. */
+    url?: string;
 }
 
 /** Merged into every resolve call by Spool. */
@@ -189,8 +192,17 @@ export interface PlaybackContext {
 export interface Resolved {
     url: string; headers?: Record<string, string>; variantId: string; playSessionId?: string;
     playMethod?: 'DirectPlay' | 'DirectStream' | 'Transcode'; container?: string;
+    /** Source ticks represented by the normalized media stream's time-pos zero; omitted means zero.
+     * Playback positions, reporting and segments remain in source coordinates.
+     */
+    timelineOriginTicks?: string;
+    /** Fresh original-edition analysis, never the negotiated output or an automatic ceiling. */
+    source?: { bitrate: number; width: number; height: number };
     streams?: Stream[]; segments?: Segment[];
-    trickplay?: { width: number; height: number; columns: number; rows: number; count: number; intervalMs: number };
+    /** Native preview loader fetches/caches sheets or one BIF sequence using this account's headers. */
+    trickplay?: { width: number; height: number; columns: number; rows: number; count: number; intervalMs: number;
+        urlTemplate: string; format?: 'sprites'; headers?: Record<string, string> } |
+        { format: 'bif'; url: string; width?: number; height?: number; headers?: Record<string, string> };
 }
 /** Answer resolve with this to show the provider's `picker` screen first; Spool calls resolve again with what it completes with merged in. */
 export interface PickRequest { pick: Record<string, Value> }
@@ -263,9 +275,8 @@ export interface RemoteState {
     queueRevision?: string; currentEntryId?: string;
     /** Genuine backend acknowledgment only; never a fabricated host sequence. */
     commandSequence?: number;
-    /** Approved source origin; only numeric {index} substitution is permitted. */
-    preview?: { width: number; height: number; columns: number; rows: number;
-        count: number; intervalMs: number; urlTemplate: string };
+    /** Approved source origin; native decoding supports sprite sheets and whole BIF sequences. */
+    preview?: Resolved['trickplay'];
 }
 export type RemoteTargetCommand =
     | { action: 'play'; itemIds: string[]; index: number; positionTicks: string;
@@ -302,8 +313,8 @@ export interface AccountActivationExtensions {
 
 export interface Source extends CatalogueExtensions, PreferenceExtensions, ApplicationDataExtensions,
     RemoteTargetExtensions, AccountActivationExtensions {
-    /** Required. Templates take {itemId} {type} {tag} {width} {height} {quality} {format}; trickplay {itemId} {width} {index} {variantId}. */
-    describe(): { artwork?: string; trickplay?: string; extensions?: Extensions;
+    /** Required. Artwork templates take {itemId} {type} {tag} {width} {height} {quality} {format}. */
+    describe(): { artwork?: string; extensions?: Extensions;
         activation?: { familyId: string; identityId: string } };
     /** Baseline-callable compatibility information; no network update check. */
     extensionStatus?: Operation<{}, { enabled: Extensions; missingHost: string[] }>;
@@ -321,8 +332,11 @@ export interface Source extends CatalogueExtensions, PreferenceExtensions, Appli
     latest?: Operation<PageArgs & { parentId?: string }, Page>;
     similar?: Operation<PageArgs & { itemId: string }, Page>;
     personItems?: Operation<PageArgs & { personId: string }, Page>;
+    /** `supported` names the BrowseFilters this library honours, as a key or `key:value`
+     *  (`filters:IsPlayed`). When present Spool offers only those; when absent it offers
+     *  every filter except `isHdr`, which is offered only where declared. */
     filterOptions?: Operation<{ parentId: string; collectionType?: string },
-        { genres?: string[]; years?: number[]; officialRatings?: string[]; tags?: string[] }>;
+        { genres?: string[]; years?: number[]; officialRatings?: string[]; tags?: string[]; supported?: string[] }>;
 
     resolve?: Operation<PlaybackContext & { itemId: string; variantId?: string; positionTicks: string; forceTranscode: boolean }, Resolved | PickRequest>;
     segments?: Operation<{ itemId: string }, { segments: Segment[] }>;
