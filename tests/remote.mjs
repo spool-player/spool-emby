@@ -62,6 +62,7 @@ export function remoteContracts(emby = false) {
     }
     const host = {
         device: { id: 'self', name: 'Controller' }, extensions: { 'spool.remote-targets': 1 },
+        isLogEnabled: () => false, log: () => {},
         emit: (name, data) => events.push({ name: name, data: data }),
         delay: () => Promise.resolve(),
         socket: () => {
@@ -161,6 +162,14 @@ export function remoteContracts(emby = false) {
             && state.preview.url === 'https://media.example/base/emby/Videos/film/index.bif?Width=320'
             && state.preview.headers['X-Emby-Token'] === 'account-token',
             'remote previews use the known playing item and account-scoped BIF credentials');
+        const previewsBefore = calls.filter(call => call.path.endsWith('/ThumbnailSet')).length;
+        return source.remoteState({ targetId: 'target', videoPreviews: false }, host).then(state => {
+            check(!state.preview && state.audioTracks.length > 0, 'disabled remote previews preserve playback tracks');
+            check(calls.filter(call => call.path.endsWith('/ThumbnailSet')).length === previewsBefore,
+                'disabled remote state does not fetch thumbnails');
+            return source.remoteConnect({ targetId: 'target', videoPreviews: false }, host);
+        }).then(state => check(!state.preview, 'disabled remote connection cannot reuse a cached descriptor'));
+    }).then(() => {
         playing.MediaSourceId = 'unknown-version';
         return source.remoteState({ targetId: 'target' }, host);
     }).then(state => {

@@ -14,6 +14,7 @@ import { catalogueContracts } from './catalogue.mjs';
 import { settingsContracts } from './settings.mjs';
 import { remoteContracts } from './remote.mjs';
 import { connectContracts } from './connect.mjs';
+import { downloadContracts } from './downloads.mjs';
 let step = 'start';
 function check(value, message) {
     if (!value)
@@ -37,6 +38,7 @@ function server(routes) {
         calls: calls,
         host: {
             device: device, delay: () => new Promise(() => {}),
+            isLogEnabled: () => false, log: () => {},
             http: (url, options) => {
                 const method = (options && options.method) || 'GET';
                 const prefixed = /^https?:\/\/[^/]+\/emby\//.test(url);
@@ -172,7 +174,9 @@ function previewContracts() {
         }
     });
     const source = account('ua', 'preview-token');
-    const resolve = variantId => source.resolve({ itemId: 'film', variantId: variantId, positionTicks: '0' }, fixture.host);
+    const resolve = (variantId, videoPreviews = true) => source.resolve({
+        itemId: 'film', variantId: variantId, positionTicks: '0', videoPreviews: videoPreviews
+    }, fixture.host);
     return resolve('film').then(result => {
         check(result.trickplay.format === 'bif'
             && result.trickplay.url === 'https://media.example/emby/Videos/film/index.bif?Width=320',
@@ -195,8 +199,20 @@ function previewContracts() {
         check(result.trickplay === undefined && result.playMethod === 'DirectPlay', 'empty indexes do not fail playback');
         thumbnails = null;
         return resolve('film');
-    }).then(result => check(result.trickplay === undefined && result.playMethod === 'DirectPlay',
-        'unsupported thumbnail discovery does not fail playback'));
+    }).then(result => {
+        check(result.trickplay === undefined && result.playMethod === 'DirectPlay',
+            'unsupported thumbnail discovery does not fail playback');
+        thumbnails = { Thumbnails: [{ PositionTicks: 0 }] };
+        metadata = { Id: 'film', MediaSources: [{ Id: 'film' }] };
+        const before = fixture.calls.filter(call => call.path.endsWith('/ThumbnailSet')).length;
+        return resolve('film', false).then(result => {
+            check(!result.trickplay && result.playMethod === 'DirectPlay', 'disabled previews do not alter playback');
+            check(fixture.calls.filter(call => call.path.endsWith('/ThumbnailSet')).length === before,
+                'disabled local previews make no thumbnail discovery request');
+            return source.details({ itemId: 'film', videoPreviews: false }, fixture.host);
+        }).then(result => check(result.item.id === 'film',
+            'disabled previews retain ordinary details without thumbnail discovery'));
+    });
 }
 
 export function run() {
@@ -370,7 +386,7 @@ export function run() {
             check(url.indexOf('is3D') < 0 && url.indexOf('NameLessThan=A') > 0 && url.indexOf('SortBy=DateCreated') > 0,
                 'unset filters stay off, # is before A');
             step = 'errors';
-            return fails(() => a.libraries({}, { device: device, http: () => respond({}, 401) }), 'http_401');
+            return fails(() => a.libraries({}, { device: device, log: () => {}, http: () => respond({}, 401) }), 'http_401');
         }).then(() => {
             step = 'sign in';
             const login = createSource({}, { device: device });
@@ -413,7 +429,7 @@ export function run() {
             check(events[3][0] === 'changed' && events[3][1].itemId === 'film', 'user data changes');
             check(events[4][0] === 'changed', 'library changes');
         }).then(qualityContract).then(baselineRepairs).then(extensionCompatibility).then(lanDiscovery)
-        .then(previewContracts).then(catalogueContracts).then(() => settingsContracts(true)).then(() => remoteContracts(true)).then(connectContracts);
+        .then(previewContracts).then(downloadContracts).then(catalogueContracts).then(() => settingsContracts(true)).then(() => remoteContracts(true)).then(connectContracts);
 }
 
 function qualityContract() {

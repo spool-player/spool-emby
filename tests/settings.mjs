@@ -45,6 +45,7 @@ function fixture(emby) {
         return documents[identity];
     }
     const host = {
+        isLogEnabled: () => false, log: () => {},
         http: (url, options) => {
             check(url.indexOf(prefix + '/') === 0, 'base path and protocol prefix are preserved');
             const parts = url.slice(prefix.length).split('?');

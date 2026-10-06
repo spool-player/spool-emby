@@ -168,33 +168,41 @@ export function createRemote(options) {
         // Neither service promises a monotonic queue revision or command acknowledgement.
         return result;
     }
-    function hydrate(host, id, raw) {
+    function hydrate(host, id, raw, videoPreviews) {
         const media = raw.NowPlayingItem;
         if (!media || !identity(media.Id)) {
             mediaCache.delete(id);
             return Promise.resolve(raw);
         }
-        const key = String(media.Id) + ':' + String((raw.PlayState || {}).MediaSourceId || '');
+        const key = String(media.Id) + ':' + String((raw.PlayState || {}).MediaSourceId || '')
+            + ':' + (videoPreviews !== false);
         let cached = mediaCache.get(id);
         if (!cached || cached.key !== key) {
             const details = request(host, 'GET', userPath('/Items/') + encodeURIComponent(media.Id),
                 { Fields: 'MediaSources' }).then(details => String(details.Id) === String(media.Id) ? details : {}, () => ({}));
-            const thumbnails = request(host, 'GET', '/Items/' + encodeURIComponent(media.Id) + '/ThumbnailSet', { Width: 320 })
-                .then(value => value, () => null);
+            const thumbnails = videoPreviews === false ? Promise.resolve(null)
+                : request(host, 'GET', '/Items/' + encodeURIComponent(media.Id) + '/ThumbnailSet', { Width: 320 })
+                    .then(value => value, () => null);
             cached = { key: key, pending: Promise.all([details, thumbnails]).then(([details, thumbnails]) => ({
-                media: details, preview: options.trickplay(details, (raw.PlayState || {}).MediaSourceId,
-                    thumbnails, server, options.previewHeaders())
+                media: details, preview: videoPreviews === false ? undefined
+                    : options.trickplay(details, (raw.PlayState || {}).MediaSourceId,
+                        thumbnails, server, options.previewHeaders())
             })) };
             mediaCache.set(id, cached);
             if (mediaCache.size > 128)
                 mediaCache.delete(mediaCache.keys().next().value);
         }
-        return cached.pending.then(details => Object.assign({}, raw, {
-            NowPlayingItem: Object.assign({}, details.media, media), preview: details.preview
-        }));
+        return cached.pending.then(details => {
+            if (host.isLogEnabled('trace'))
+                host.log('trace', 'Emby remote seek-preview availability', { enabled: videoPreviews !== false,
+                    available: Boolean(details.preview) });
+            return Object.assign({}, raw, {
+                NowPlayingItem: Object.assign({}, details.media, media), preview: details.preview
+            });
+        });
     }
-    function state(host, id) {
-        return session(host, id).then(raw => hydrate(host, id, raw)).then(normalize);
+    function state(host, id, videoPreviews) {
+        return session(host, id).then(raw => hydrate(host, id, raw, videoPreviews)).then(normalize);
     }
     function loadQueue(host, id, raw) {
         const pending = emby ? request(host, 'GET', '/Sessions/PlayQueue', { Id: id })
@@ -431,8 +439,8 @@ export function createRemote(options) {
                     queueEditing: 'replace', customControls: custom(raw) })) };
             });
         },
-        remoteConnect: (args, host) => state(host, targetId(args)),
-        remoteState: (args, host) => state(host, targetId(args)),
+        remoteConnect: (args, host) => state(host, targetId(args), args.videoPreviews),
+        remoteState: (args, host) => state(host, targetId(args), args.videoPreviews),
         remoteQueue: (args, host) => {
             const id = targetId(args);
             const limit = args.limit === undefined ? 50 : args.limit;

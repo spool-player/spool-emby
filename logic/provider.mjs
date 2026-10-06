@@ -9,6 +9,7 @@ import { createCatalogue } from './catalogue.mjs';
 import { createSettings } from './settings.mjs';
 import { createRemote } from './remote.mjs';
 import { createConnect } from './connect.mjs';
+import { createDownloads } from './downloads.mjs';
 
 // sdk BrowseFilters keys this server takes as they are (its query names are
 // case-insensitive); lists of names are joined with |, the rest with commas.
@@ -115,6 +116,7 @@ export function createSource(configuration, sourceHost) {
     const remote = createRemote({ request, item, userPath, userId, device, extensions, server, emby: true,
         trickplay, previewHeaders: () => ({ 'X-Emby-Token': token }), emit: sourceHost.emit });
     const connectLogin = createConnect(device, normalizeServer, headers, info);
+    const downloads = createDownloads({ request, userPath, segment, query, streamUrl, server, token, device });
 
     function streamUrl(value) {
         const path = String(value || '');
@@ -149,6 +151,7 @@ export function createSource(configuration, sourceHost) {
             if (response.status < 200 || response.status >= 300) {
                 if (response.status === 401 || response.status === 403)
                     catalogue.invalidate();
+                host.log('warn', 'Emby API request failed', { status: response.status, method: method });
                 throw new Error('http_' + response.status);
             }
             return response.body ? JSON.parse(response.body) : {};
@@ -315,6 +318,8 @@ export function createSource(configuration, sourceHost) {
         dataDelete: settings.dataDelete,
         details: (args, host) => request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: detailFields })
             .then(raw => ({ item: item(raw) })),
+        download: downloads.download,
+        downloadRelease: downloads.downloadRelease,
         seasons: (args, host) => list(host, '/Shows/' + segment(args.seriesId) + '/Seasons', args),
         episodes: (args, host) => list(host, '/Shows/' + segment(args.seriesId) + '/Episodes', args,
             { SeasonId: args.seasonId, Fields: fields + ',MediaSources' }),
@@ -363,8 +368,9 @@ export function createSource(configuration, sourceHost) {
             // Item type distinguishes audio, and chapters carry Emby's skip markers.
             const details = request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters,MediaSources' })
                 .then(raw => raw && String(raw.Id) === args.itemId ? raw : null, () => null);
-            const thumbnails = request(host, 'GET', '/Items/' + segment(args.itemId) + '/ThumbnailSet', { Width: 320 })
-                .then(raw => raw, () => null);
+            const thumbnails = args.videoPreviews === false ? Promise.resolve(null)
+                : request(host, 'GET', '/Items/' + segment(args.itemId) + '/ThumbnailSet', { Width: 320 })
+                    .then(raw => raw, () => null);
             return Promise.all([playbackInfo, details, localNetwork, thumbnails]).then(([playback, raw, local, previews]) => {
                 if (playback.ErrorCode)
                     throw new Error('playback_unavailable');
@@ -399,13 +405,20 @@ export function createSource(configuration, sourceHost) {
                 if (playback.PlaySessionId)
                     sessions.set(playback.PlaySessionId, { liveStreamId: source.RequiresClosing ? source.LiveStreamId : '',
                         transcoding: playMethod !== 'DirectPlay' });
+                const preview = args.videoPreviews === false ? undefined
+                    : trickplay(raw, source.Id, previews, server, { 'X-Emby-Token': token });
+                host.log('debug', 'Emby playback resolved', { playMethod: playMethod });
+                if (host.isLogEnabled('trace'))
+                    host.log('trace', 'Emby seek-preview availability', { enabled: args.videoPreviews !== false,
+                        available: Boolean(preview), reason: args.videoPreviews === false ? 'disabled'
+                            : preview ? 'available' : 'no_matching_thumbnail_index' });
                 return { url: url, headers: { 'X-Emby-Token': token }, variantId: String(source.Id),
                     playSessionId: playback.PlaySessionId || '', playMethod: playMethod,
                     container: ((playMethod === 'DirectPlay' ? source.Container : source.TranscodingContainer)
                         || source.Container || '').split(',')[0],
                     streams: (source.MediaStreams || []).map(stream),
                     segments: segments(source.Chapters ? source : raw),
-                    trickplay: trickplay(raw, source.Id, previews, server, { 'X-Emby-Token': token }) };
+                    trickplay: preview };
             });
         },
         segments: (args, host) => request(host, 'GET', userPath('/Items/' + segment(args.itemId)), { Fields: 'Chapters' })

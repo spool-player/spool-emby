@@ -41,6 +41,7 @@ export function catalogueContracts() {
     let searchPending = [];
     const host = {
         device: { id: 'device' }, extensions: extensions, emit: () => {}, delay: () => new Promise(() => {}),
+        isLogEnabled: () => false, log: () => {},
         socket: () => {
             const socket = { send: () => {}, close: () => {} };
             sockets.push(socket);

@@ -25,7 +25,7 @@ export function connectContracts() {
     let advertisedId = 'server-one';
     let exchanges = 0;
     const calls = [];
-    const host = { http: (url, options) => {
+    const host = { isLogEnabled: () => false, log: () => {}, http: (url, options) => {
         calls.push({ url: url, options: options });
         const h = options.headers;
         if (url.indexOf('https://connect.emby.media/') === 0) {

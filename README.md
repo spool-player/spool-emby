@@ -32,6 +32,11 @@ sequence. Spool decodes its timestamps and images natively and caches the sequen
 for subsequent seeks. Empty sets, unsupported endpoints or failed preview loads
 leave previews unavailable without interrupting playback.
 
+The device-local **Seek previews** preference is passed as `videoPreviews`.
+When false, local and remote operations omit descriptors and make no
+`ThumbnailSet` requests, including after a cached enabled remote session.
+Ordinary item details, playback tracks and chapter markers remain available.
+
 These documented endpoints select an **item**, not a `MediaSourceId`. Previews
 are offered only when the known playing source ID identifies that item, or item
 metadata has one source matching the selected ID. Unknown source IDs, mismatched
@@ -39,6 +44,37 @@ item metadata and ambiguous alternate editions do not borrow another index. BIF
 URLs stay on the configured server and contain no token; `X-Emby-Token` remains
 in account-scoped request headers.
 
+### Offline downloads
+
+Original downloads select an exact finite local `File` media source using
+`/Videos/{Id}/stream?Static=true&MediaSourceId=…` (or `/Audio/` for audio).
+Multiple editions open the provider-owned **Choose version** picker; selecting
+a version returns only its ID, preserving native mode and quality choices.
+Missing editions, multipart items, live/openable sources and disc images are
+rejected rather than silently saving a partial or different edition.
+
+Server-transcoded downloads negotiate a separate HTTP MP4/H.264/AAC
+`DeviceProfile` through `PlaybackInfo`, with direct playback/stream-copy
+disabled and the chosen bitrate/height ceilings. The accepted result must be a
+same-origin [`/Videos/{Id}/stream.mp4`](https://dev.emby.media/reference/RestAPI/VideoService/getVideosByIdStreamByContainer.html)
+HTTP progressive endpoint, never playback HLS or DASH. Transfer starts at zero,
+finishes at EOF and keeps the account token in request headers. An unavailable
+progressive profile fails explicitly; no playlist-to-file fallback is used.
+Audio originals are supported, but this video encoding profile does not offer
+audio-only conversion.
+
+Every request rechecks `EnableContentDownloading` and item download denial.
+Conversion also requires video/audio transcoding permission and respects
+explicit `EnableSyncTranscoding: false`. The server still enforces its own
+licensing, concurrency and access rules. Download devices/sessions are separate
+from playback: `downloadRelease` deletes only the generated encoder matching
+both device ID and play-session ID on success, failure or cancellation, without
+playback reports or watched-state changes.
+
+Native host diagnostics report profile negotiation, protocol/permission
+outcomes and local/remote preview availability. Trace fields use native
+`isLogEnabled` guards; messages never include media URLs, credentials,
+filesystem paths or raw server responses.
 
 ### Emby Connect
 
@@ -246,11 +282,18 @@ The contract uses synthetic server responses to cover account isolation, catalog
 selected editions, quality precedence/boundaries, remux safety, audio routing and session cleanup.
 It does not replace a smoke run against an authorized Emby server or an offscreen Spool check of the QML screens.
 
+The optional `node tests/transfer.mjs` smoke requires Node.js and FFmpeg/ffprobe.
+It uses a local Emby-shaped HTTP fixture with actual server-side encoding,
+streams the progressive MP4 to disk, checks media duration/height and cleanup,
+and compares original bytes. This is network/transfer proof, not certification
+against an authorized real Emby server.
+
 ## Releasing
 
-Current release: **0.1.5**, adding authenticated, item-scoped BIF seek previews
-for local playback and remote sessions, with native decoding in Spool. Retains
-compiled host sign-in forms and the Emby Connect PIN link from 0.1.3.
+Prepared release: **0.1.6**, adding original and finite progressive server-
+transcoded downloads, exact-version selection, global seek-preview opt-out and
+native provider diagnostics. Retains authenticated local/remote BIF previews,
+compiled sign-in forms and Emby Connect PIN linking.
 
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
 After validation, use the version in the current manifest:
