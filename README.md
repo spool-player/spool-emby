@@ -110,12 +110,11 @@ Live Connect/server behavior requires separate authorized service verification.
 
 Optional features use exact version-one declarations: `spool.artwork-owners` for
 inherited thumbnail/backdrop ownership and `spool.speed-test` for native throughput
-probes. API 0.2 hosts without these extensions retain baseline login, browsing,
-playback and reporting. They receive own images and baseline series/album poster
-fallbacks, but no inherited thumbnail/backdrop tags that could target the wrong ID.
-Speed testing is no longer a legacy capability. Compiled login and item pickers
-use the context's `missingHostExtensions` to show “Update Spool to use all features
-of this provider.” only for missing optional host support, not server permission failures.
+probes. Feature availability comes from exact host/account negotiation, not the
+application version. Without owner support, own images and ordinary series/album
+poster fallbacks remain available, but inherited child tags are omitted. Current
+provider builds require the current Spool host contract, including native logging;
+older hosts are not supported.
 
 Playlist rows also preserve `PlaylistItemId` as an opaque `entryId`, so repeated
 occurrences of the same media item remain distinguishable.
@@ -257,8 +256,8 @@ starts probing `/emby/System/Info/Public` on port 8096, in bounded pages of at m
 and IDs are deduplicated across pages and UDP replies. Login shows progress and
 supports Cancel/Back; closing login cancels the search. No authenticated origin
 is granted by discovery. Selecting a result still uses normal origin approval.
-Older hosts hide this control and retain UDP/manual login. The subnet search
-never runs at app launch or in the background.
+When LAN probing is unavailable, UDP/manual login remains available. The subnet
+search never runs at app launch or in the background.
 
 ## Development
 
