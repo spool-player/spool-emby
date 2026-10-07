@@ -96,8 +96,12 @@ export function createSource(configuration, sourceHost) {
     const userId = configuration.userId || '';
     const sessions = new Map();
     const declared = ["search", "userState", "reporting", "segments", "streamQuality", "trickplay", "discovery", "remoteControl", "downloads", "downloadTranscode", "artworkOwners", "speedTest", "lanProbe", "suggestions", "itemActions", "collectionEditing", "playbackQueueReporting", "playbackPreferences", "settingsStorage", "remoteTargets"];
-    const capabilities = Object.freeze(Object.fromEntries(declared.filter(id =>
-        sourceHost.capabilities && sourceHost.capabilities[id] === true).map(id => [id, true])));
+    const capabilities = {};
+    for (const id of declared) {
+        if (sourceHost.capabilities && sourceHost.capabilities[id] === true)
+            capabilities[id] = true;
+    }
+    Object.freeze(capabilities);
     const features = Object.freeze({ artworkOwners: capabilities['artworkOwners'] === true });
     const item = raw => mapItem(raw, features);
     const page = (result, first, limit) => mapPage(result, first, limit, features);
