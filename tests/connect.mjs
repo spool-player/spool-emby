@@ -19,7 +19,7 @@ function deferred() {
 
 export function connectContracts() {
     const device = { id: 'device & one', version: '1.2', name: 'Spool' };
-    let source = createSource({}, { device: device }); // Deliberately API 0.2: no extensions.
+    let source = createSource({}, { device: device }); // Deliberately No optional capability declarations.
     let approved = false;
     let pinApproved = false;
     let advertisedId = 'server-one';

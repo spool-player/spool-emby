@@ -14,7 +14,7 @@ const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 const documentKey = '12345678-1234-4567-89ab-0123456789ab';
 const secondKey = '12345678-1234-4567-89ab-0123456789ac';
 const dataField = 'spool.data.v1';
-const extensions = { 'spool.playback-preferences': 1, 'spool.settings-storage': 1 };
+const capabilities = { 'playbackPreferences': true, 'settingsStorage': true };
 function nested(depth) {
     let value = null;
     for (let i = 0; i < depth; ++i)
@@ -97,22 +97,22 @@ function fixture(emby) {
         host: host, calls: calls, user: user, document: document,
         fail: (method, status) => { failure = { method: method, status: status }; },
         source: (id, offered) => createSource({ server: base, userId: id, token: 'token-' + id },
-            { extensions: offered, device: { id: 'test' } })
+            { capabilities: offered, device: { id: 'test' } })
     };
 }
 
 export function settingsContracts(emby = false) {
     const f = fixture(emby);
-    const source = f.source('ua', extensions);
-    const other = f.source('ub', extensions);
+    const source = f.source('ua', capabilities);
+    const other = f.source('ub', capabilities);
     const legacy = f.source('ua');
-    const wrong = f.source('ua', { 'spool.playback-preferences': 2, 'spool.settings-storage': 2 });
+    const wrong = f.source('ua', { 'playbackPreferences': 2, 'settingsStorage': 2 });
     const operations = { preferencesRead: {}, preferencesWrite: { values: { audioMode: 'Smart' } }, dataInfo: {},
         dataRead: { key: documentKey }, dataWrite: { key: documentKey, value: null }, dataDelete: { key: documentKey } };
     let chain = Promise.resolve();
     for (const operation of Object.keys(operations)) {
         for (const unavailable of [legacy, wrong])
-            chain = chain.then(() => fails(() => unavailable[operation](operations[operation], f.host), 'unsupported_extension'));
+            chain = chain.then(() => fails(() => unavailable[operation](operations[operation], f.host), 'unsupported_capability'));
     }
     chain = chain.then(() => {
         check(f.calls.length === 0, 'unsupported calls do no HTTP');

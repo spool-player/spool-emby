@@ -32,7 +32,7 @@ function knownTicks(value) {
 }
 
 export function createRemote(options) {
-    const { request, item, userPath, userId, device, extensions, server, emby } = options;
+    const { request, item, userPath, userId, device, capabilities, server, emby } = options;
     const targets = new Map();
     const snapshots = new Map();
     const queueReads = new Map();
@@ -41,8 +41,8 @@ export function createRemote(options) {
     let snapshotSequence = 0;
     let listGeneration = 0;
     function guard() {
-        if (extensions['spool.remote-targets'] !== 1)
-            throw new Error('unsupported_extension');
+        if (capabilities['remoteTargets'] !== true)
+            throw new Error('unsupported_capability');
     }
     function targetId(args) {
         guard();

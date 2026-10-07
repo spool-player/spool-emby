@@ -7,7 +7,7 @@ Spool.
 
 | | |
 | --- | --- |
-| `manifest.json` | Identity, capabilities, screens and item actions (provider API 0.2) |
+| `manifest.json` | Identity, capabilities, screens and item actions (package format 3) |
 | `logic/provider.mjs` | Sign-in, catalogue, playback, item actions |
 | `logic/items.mjs` | Emby JSON to Spool's item shape; intro and credit chapters to segments |
 | `logic/profile.mjs` | The DeviceProfile sent with every playback request |
@@ -100,16 +100,16 @@ ID is saved. If that local credential expires, use normal server sign-in or repe
 Connect linking.
 
 The login screen owns transient PIN/membership state across draft-source recreation
-when an origin is approved. This is a baseline API 0.2 custom-operation flow and
-does not require an activation extension or new host authentication API.
+when an origin is approved. This is a baseline current format-3 custom-operation flow and
+does not require an accountActivation capability or new host authentication API.
 Stateful contracts cover cloud/local credential separation, source recreation,
 selected-origin exchange, identity mismatch, stale/cancelled polls and expiry.
 Protocol references: [Connect membership and exchange](https://raw.githubusercontent.com/MediaBrowser/Emby.SDK/master/Documentation/doc/restapi/Emby-Connect.html)
 and [official Roku PIN flow](https://raw.githubusercontent.com/MediaBrowser/Emby.Roku/master/source/EmbyConnectScreen.brs).
 Live Connect/server behavior requires separate authorized service verification.
 
-Optional features use exact version-one declarations: `spool.artwork-owners` for
-inherited thumbnail/backdrop ownership and `spool.speed-test` for native throughput
+Optional features use exact boolean declarations: `artworkOwners` for
+inherited thumbnail/backdrop ownership and `speedTest` for native throughput
 probes. Feature availability comes from exact host/account negotiation, not the
 application version. Without owner support, own images and ordinary series/album
 poster fallbacks remain available, but inherited child tags are omitted. Current
@@ -119,8 +119,8 @@ older hosts are not supported.
 Playlist rows also preserve `PlaylistItemId` as an opaque `entryId`, so repeated
 occurrences of the same media item remain distinguishable.
 
-Version-one `spool.suggestions`, `spool.item-actions`,
-`spool.collection-editing` and `spool.playback-queue-reporting` add bounded
+Version-one `suggestions`, `itemActions`,
+`collectionEditing` and `playbackQueueReporting` add bounded
 suggestions, permission-aware menus, occurrence-aware editing and native queue
 reports. Search runs dedicated Series and expanded mixed-type queries concurrently,
 prioritizes Series, deduplicates and returns a complete bounded top-N result.
@@ -136,7 +136,7 @@ not reordered. Start/progress reports reuse a source-owned immutable queue
 snapshot and preserve duplicate media occurrences; stop/cleanup behavior remains
 unchanged. These operations do not modify user preferences.
 
-`spool.remote-targets` adds outbound control independently of inbound remote
+`remoteTargets` adds outbound control independently of inbound remote
 commands. It requests `/emby/Sessions?ControllableByUserId=...`, filters documented
 `SupportsRemoteControl` and flat `SupportedCommands`, excludes this installation,
 and reads the exact selected session with `Id`. It does not assume Jellyfin's
@@ -165,7 +165,7 @@ and [playstate](https://dev.emby.media/reference/RestAPI/SessionsService/postSes
 Fixtures and loopback exercises do not establish live-client support; the
 peer's actual capabilities and server authorization remain authoritative.
 
-`spool.playback-preferences` exposes the signed-in user's audio/subtitle languages,
+`playbackPreferences` exposes the signed-in user's audio/subtitle languages,
 Default/Smart audio mode and Default/Smart/OnlyForced/Always/None subtitle mode.
 Writes freshly fetch the full user `Configuration` and `Policy`, honor
 `EnableUserPreferenceAccess`, and merge only the four mapped fields before posting
@@ -174,7 +174,7 @@ administrator policy is never written. Unknown/missing enum values (including
 Emby's service-specific HearingImpaired mode) remain read-only in this normalized
 contract. Spool handles two-letter language normalization.
 
-`spool.settings-storage` stores arbitrary application JSON in
+`settingsStorage` stores arbitrary application JSON in
 `CustomPrefs["spool.data.v1"]`, with one canonical lowercase UUID DisplayPreferences
 record per document and signed-in user under client `Spool`. GET uses `UserId` and
 `Client`; POST uses `UserId` and keeps `Client` in the complete DTO. Writes/deletes
@@ -249,7 +249,7 @@ never silently downgraded. Each attempted origin is approved before probing it.
 UDP replies use the sender in place of a different advertised literal IP, while
 DNS names, schemes, ports and base paths remain intact.
 
-Hosts negotiating `spool.lan-probe` version 1 also offer **Search local network**
+Hosts negotiating `lanProbe` version 1 also offer **Search local network**
 in login. Only an explicit viewer request followed by Spool's host-owned consent
 starts probing `/emby/System/Info/Public` on port 8096, in bounded pages of at most
 32 targets. Public information is validated (Jellyfin responses are excluded),

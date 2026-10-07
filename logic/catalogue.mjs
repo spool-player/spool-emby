@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 // Optional catalogue contracts. All IDs here are server IDs, never host-scoped IDs.
-export function createCatalogue({ request, list, userPath, segment, extensions, userId, emby = false }) {
+export function createCatalogue({ request, list, userPath, segment, capabilities, userId, emby = false }) {
     let policy = null;
     let policyGeneration = 0;
     let queue = null;
@@ -8,9 +8,9 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
         policy = null;
         ++policyGeneration;
     }
-    function requireExtension(id) {
-        if (extensions[id] !== 1)
-            throw new Error('unsupported_extension');
+    function requireCapability(id) {
+        if (capabilities[id] !== true)
+            throw new Error('unsupported_capability');
     }
     function userPolicy(host) {
         if (policy)
@@ -106,7 +106,7 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
         if (args.event === 'stop')
             return {};
         if (args.queue !== undefined || args.queueIndex !== undefined)
-            requireExtension('spool.playback-queue-reporting');
+            requireCapability('playbackQueueReporting');
         if (args.queue !== undefined) {
             const snapshot = args.queue;
             if (!snapshot || typeof snapshot.revision !== 'string' || !snapshot.revision
@@ -159,7 +159,7 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
             });
         },
         suggestions: (args, host) => {
-            requireExtension('spool.suggestions');
+            requireCapability('suggestions');
             const limit = boundedLimit(args, 60);
             return list(host, userPath('/Items'), { limit: limit }, {
                 Recursive: true, IncludeItemTypes: 'Movie,Series', MediaTypes: 'Video',
@@ -167,15 +167,15 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
             }).then(result => ({ items: result.items.slice(0, limit), cursor: null, exhausted: true }));
         },
         itemActions: (args, host) => {
-            requireExtension('spool.item-actions');
+            requireCapability('itemActions');
             return rawItem(host, args.itemId).then(raw => allowedActions(host, raw)).then(actions => ({ actions: actions }));
         },
         collectionInfo: (args, host) => {
-            requireExtension('spool.collection-editing');
+            requireCapability('collectionEditing');
             return container(host, args.containerId);
         },
         collectionEntries: (args, host) => {
-            requireExtension('spool.collection-editing');
+            requireCapability('collectionEditing');
             return container(host, args.containerId).then(info =>
                 list(host, info.ordered ? '/Playlists/' + segment(args.containerId) + '/Items'
                     : userPath('/Items'), args, info.ordered ? {} : { ParentId: args.containerId, Recursive: false })
@@ -190,7 +190,7 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
                     }));
         },
         collectionRemove: (args, host) => {
-            requireExtension('spool.collection-editing');
+            requireCapability('collectionEditing');
             segment(args.entryId);
             return container(host, args.containerId).then(info => {
                 if (!info.removable)
@@ -202,7 +202,7 @@ export function createCatalogue({ request, list, userPath, segment, extensions, 
             });
         },
         collectionMove: (args, host) => {
-            requireExtension('spool.collection-editing');
+            requireCapability('collectionEditing');
             if (!Number.isInteger(args.index) || args.index < 0)
                 throw new Error('invalid_index');
             return container(host, args.containerId).then(info => {

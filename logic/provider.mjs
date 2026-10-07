@@ -95,25 +95,18 @@ export function createSource(configuration, sourceHost) {
     const token = configuration.token || '';
     const userId = configuration.userId || '';
     const sessions = new Map();
-    const declared = ['spool.artwork-owners', 'spool.speed-test', 'spool.lan-probe',
-        'spool.suggestions', 'spool.item-actions', 'spool.collection-editing', 'spool.playback-queue-reporting',
-        'spool.playback-preferences', 'spool.settings-storage', 'spool.remote-targets'];
-    const extensions = {};
-    for (const id of declared) {
-        if (sourceHost.extensions && sourceHost.extensions[id] === 1)
-            extensions[id] = 1;
-    }
-    Object.freeze(extensions);
-    const missingHost = declared.filter(id => !extensions[id]);
-    const features = Object.freeze({ artworkOwners: extensions['spool.artwork-owners'] === 1 });
+    const declared = ["search", "userState", "reporting", "segments", "streamQuality", "trickplay", "discovery", "remoteControl", "downloads", "downloadTranscode", "artworkOwners", "speedTest", "lanProbe", "suggestions", "itemActions", "collectionEditing", "playbackQueueReporting", "playbackPreferences", "settingsStorage", "remoteTargets"];
+    const capabilities = Object.freeze(Object.fromEntries(declared.filter(id =>
+        sourceHost.capabilities && sourceHost.capabilities[id] === true).map(id => [id, true])));
+    const features = Object.freeze({ artworkOwners: capabilities['artworkOwners'] === true });
     const item = raw => mapItem(raw, features);
     const page = (result, first, limit) => mapPage(result, first, limit, features);
     let lanSeen = new Set();
     const userPath = path => '/Users/' + segment(userId) + path;
 
-    const catalogue = createCatalogue({ request, list, userPath, segment, extensions, userId, emby: true });
-    const settings = createSettings({ request, userPath, extensions, userId, emby: true });
-    const remote = createRemote({ request, item, userPath, userId, device, extensions, server, emby: true,
+    const catalogue = createCatalogue({ request, list, userPath, segment, capabilities, userId, emby: true });
+    const settings = createSettings({ request, userPath, capabilities, userId, emby: true });
+    const remote = createRemote({ request, item, userPath, userId, device, capabilities, server, emby: true,
         trickplay, previewHeaders: () => ({ 'X-Emby-Token': token }), emit: sourceHost.emit });
     const connectLogin = createConnect(device, normalizeServer, headers, info);
     const downloads = createDownloads({ request, userPath, segment, query, streamUrl, server, token, device });
@@ -180,7 +173,7 @@ export function createSource(configuration, sourceHost) {
     if (server && token && sourceHost.socket) {
         const socketUrl = server.replace(/^http/i, 'ws') + '/embywebsocket?' + query({ api_key: token, deviceId: device.id });
         disconnect = connect(sourceHost, socketUrl, headers(true), catalogue.invalidate,
-            extensions['spool.remote-targets'] === 1);
+            capabilities['remoteTargets'] === true);
         // Tell the server what this client can be asked to do.
         sourceHost.http(server + '/emby/Sessions/Capabilities/Full', {
             method: 'POST', headers: headers(true),
@@ -190,7 +183,6 @@ export function createSource(configuration, sourceHost) {
     }
 
     return {
-        extensionStatus: () => ({ enabled: extensions, missingHost: missingHost }),
         remoteTargets: remote.remoteTargets,
         remoteConnect: remote.remoteConnect,
         remoteState: remote.remoteState,
@@ -199,7 +191,7 @@ export function createSource(configuration, sourceHost) {
         remoteControls: remote.remoteControls,
         remoteControl: remote.remoteControl,
         describe: () => ({
-            extensions: extensions,
+            capabilities: capabilities,
             artwork: server + '/emby/Items/{itemId}/Images/{type}?tag={tag}&maxWidth={width}&quality={quality}&format={format}'
         }),
 
@@ -224,8 +216,8 @@ export function createSource(configuration, sourceHost) {
                 return { servers: Object.values(servers) };
             }),
         discoverMore: (args, host) => {
-            if (extensions['spool.lan-probe'] !== 1 || typeof host.probeLocalHttp !== 'function')
-                throw new Error('unsupported_extension');
+            if (capabilities['lanProbe'] !== true || typeof host.probeLocalHttp !== 'function')
+                throw new Error('unsupported_capability');
             const options = { port: 8096, path: '/emby/System/Info/Public', limit: 32 };
             if (args.cursor !== undefined && args.cursor !== null)
                 options.cursor = args.cursor;
@@ -342,8 +334,8 @@ export function createSource(configuration, sourceHost) {
                     years: years.map(Number).filter(Number.isInteger) }));
         },
         speedTest: (args, host) => {
-            if (extensions['spool.speed-test'] !== 1)
-                throw new Error('unsupported_extension');
+            if (capabilities['speedTest'] !== true)
+                throw new Error('unsupported_capability');
             return host.speedTest({
                 url: server + '/emby/Playback/BitrateTest?Size={bytes}&_={nonce}',
                 headers: { 'X-Emby-Token': token }

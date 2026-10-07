@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 import { createSource } from '../logic/provider.mjs';
 
-const extensions = { 'spool.suggestions': 1, 'spool.item-actions': 1,
-    'spool.collection-editing': 1, 'spool.playback-queue-reporting': 1 };
+const capabilities = { 'suggestions': true, 'itemActions': true,
+    'collectionEditing': true, 'playbackQueueReporting': true };
 function check(value, message) {
     if (!value)
         throw new Error('catalogue contract: ' + message);
@@ -40,7 +40,7 @@ export function catalogueContracts() {
     const sockets = [];
     let searchPending = [];
     const host = {
-        device: { id: 'device' }, extensions: extensions, emit: () => {}, delay: () => new Promise(() => {}),
+        device: { id: 'device' }, capabilities: capabilities, emit: () => {}, delay: () => new Promise(() => {}),
         isLogEnabled: () => false, log: () => {},
         socket: () => {
             const socket = { send: () => {}, close: () => {} };
@@ -240,10 +240,10 @@ export function catalogueContracts() {
             check(reports[3].NowPlayingQueue === undefined && reports[3].PlaylistIndex === undefined,
                 'stop reports retain their existing shape');
             callsBeforeLegacy = calls.length;
-            return fails(() => legacy.suggestions({ limit: 5 }, host), 'unsupported_extension');
-        }).then(() => fails(() => legacy.itemActions({ itemId: 'film' }, host), 'unsupported_extension'))
-            .then(() => fails(() => legacy.collectionInfo({ containerId: 'list' }, host), 'unsupported_extension'))
+            return fails(() => legacy.suggestions({ limit: 5 }, host), 'unsupported_capability');
+        }).then(() => fails(() => legacy.itemActions({ itemId: 'film' }, host), 'unsupported_capability'))
+            .then(() => fails(() => legacy.collectionInfo({ containerId: 'list' }, host), 'unsupported_capability'))
             .then(() => fails(() => legacy.report({ event: 'start', itemId: 'film', positionTicks: '0', queue: snapshot }, host),
-                'unsupported_extension'))
+                'unsupported_capability'))
             .then(() => check(calls.length === callsBeforeLegacy, 'unnegotiated optional operations never send HTTP'));
 }

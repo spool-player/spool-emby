@@ -117,10 +117,10 @@ function preferencePatch(values) {
     return patch;
 }
 
-export function createSettings({ request, userPath, extensions, userId, emby = false }) {
-    function requireExtension(id) {
-        if (extensions[id] !== 1)
-            throw new Error('unsupported_extension');
+export function createSettings({ request, userPath, capabilities, userId, emby = false }) {
+    function requireCapability(id) {
+        if (capabilities[id] !== true)
+            throw new Error('unsupported_capability');
         if (!userId)
             throw new Error('not_signed_in');
     }
@@ -142,7 +142,7 @@ export function createSettings({ request, userPath, extensions, userId, emby = f
         });
     }
     function dataKey(args, mutation) {
-        requireExtension('spool.settings-storage');
+        requireCapability('settingsStorage');
         // Weak replacement storage must never perform even a read on a CAS call.
         if (mutation && owns(args, 'expectedRevision'))
             throw new Error('unsupported_condition');
@@ -167,7 +167,7 @@ export function createSettings({ request, userPath, extensions, userId, emby = f
     }
     return {
         preferencesRead: (args, host) => {
-            requireExtension('spool.playback-preferences');
+            requireCapability('playbackPreferences');
             return currentUser(host).then(user => {
                 const values = preferenceValues(user.Configuration);
                 return { values: values,
@@ -175,7 +175,7 @@ export function createSettings({ request, userPath, extensions, userId, emby = f
             });
         },
         preferencesWrite: (args, host) => {
-            requireExtension('spool.playback-preferences');
+            requireCapability('playbackPreferences');
             const patch = preferencePatch(args.values);
             return currentUser(host).then(user => {
                 if (user.Policy && user.Policy.EnableUserPreferenceAccess === false)
@@ -193,7 +193,7 @@ export function createSettings({ request, userPath, extensions, userId, emby = f
             });
         },
         dataInfo: () => {
-            requireExtension('spool.settings-storage');
+            requireCapability('settingsStorage');
             return { maxBytes: maxBytes, conditionalWrites: false };
         },
         dataRead: (args, host) => {
