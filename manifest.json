@@ -2,7 +2,7 @@
   "format": 3,
   "id": "spool.emby",
   "name": "Emby",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "Spool",
   "summary": "Your Emby server",
   "homepage": "https://github.com/spool-player/spool-emby",
@@ -35,7 +35,8 @@
   ],
   "ui": {
     "login": "ui/Login.qml",
-    "picker": "ui/Picker.qml"
+    "picker": "ui/Picker.qml",
+    "settings": "ui/Settings.qml"
   },
   "actions": [
     {

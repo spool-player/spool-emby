@@ -27,12 +27,12 @@ jobs:
         run: timeout 20s build/sdk/provider-contract-runner tests/contract.mjs
       - name: Build and validate the package
         run: |
-          python3 sdk/spool-provider.py build . --output "dist/$(python3 -c 'import json; m = json.load(open("manifest.json")); print(m["id"] + "-" + m["version"])').tar.zst"
-          python3 sdk/spool-provider.py validate dist/*.tar.zst
+          python3 sdk/spool-provider.py build . --output "dist/$(python3 -c 'import json; m = json.load(open("manifest.json")); print(m["id"] + "-" + m["version"])').szo"
+          python3 sdk/spool-provider.py validate dist/*.szo
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: provider-package
-          path: dist/*.tar.zst
+          path: dist/*.szo
           if-no-files-found: error
 
   release:
@@ -59,21 +59,21 @@ jobs:
           ID=$(python3 -c 'import json; print(json.load(open("manifest.json"))["id"])')
           VERSION=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
           test "$RELEASE_TAG" = "v$VERSION" || { echo "tag $RELEASE_TAG does not match manifest version $VERSION"; exit 1; }
-          PACKAGE="dist/$ID-$VERSION.tar.zst"
+          PACKAGE="dist/$ID-$VERSION.szo"
           python3 sdk/spool-provider.py build . --output "$PACKAGE"
           python3 sdk/spool-provider.py feed "$PACKAGE" \
-            --url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$ID-$VERSION.tar.zst" \
+            --url "https://github.com/$REPOSITORY/releases/download/$RELEASE_TAG/$ID-$VERSION.szo" \
             > dist/spool-provider.json
           cat dist/spool-provider.json
       - uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45
         with:
-          subject-path: dist/*.tar.zst
+          subject-path: dist/*.szo
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" dist/*.tar.zst dist/spool-provider.json --verify-tag \
+          gh release create "$RELEASE_TAG" dist/*.szo dist/spool-provider.json --verify-tag \
             --title "$RELEASE_TAG" --notes "Emby for Spool $RELEASE_TAG. Spool installs and updates it from spool-provider.json."
       # The store picks up first-party releases on its schedule; this asks it
       # to look now. Needs a token that can dispatch to spool-providers.

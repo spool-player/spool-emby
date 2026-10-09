@@ -17,6 +17,7 @@ Spool.
 | `logic/connect.mjs`, `logic/connect-flow.mjs` | Emby Connect transport and transient login-screen state |
 | `ui/Login.qml` | Emby Connect adapter and service labels for Spool's compiled login/linking surfaces |
 | `ui/Picker.qml` | Service command mappings for compiled item pickers and device controls |
+| `ui/Settings.qml` | Signed-in server user's native audio/subtitle preferences |
 
 Several users and several servers can be signed in at once. Users of the same server are alternatives
 to each other in Spool; different servers are shown together. Watching together is not supported.
@@ -174,6 +175,14 @@ administrator policy is never written. Unknown/missing enum values (including
 Emby's service-specific HearingImpaired mode) remain read-only in this normalized
 contract. Spool handles two-letter language normalization.
 
+The provider settings screen edits these server-user preferences, not Spool's
+device-local playback or appearance settings. Changes affect this signed-in
+user on this Emby server and can affect other Emby clients. It saves only edited
+fields after server acceptance, retains drafts on failures, and shows policy-
+restricted or unsupported fields as read-only. Language inputs accept empty
+values or lowercase ISO-639-2 codes such as `eng`; unknown server modes are not
+replaced. Closing the screen uses the host's context cancellation.
+
 `settingsStorage` stores arbitrary application JSON in
 `CustomPrefs["spool.data.v1"]`, with one canonical lowercase UUID DisplayPreferences
 record per document and signed-in user under client `Spool`. GET uses `UserId` and
@@ -236,12 +245,12 @@ Protocol references:
 and Emby's [official JavaScript client](https://github.com/MediaBrowser/Emby.ApiClient.Javascript/blob/master/apiclient.js).
 
 The provider's thin QML adapters use Spool's precompiled login, linking, picker and
-device-control surfaces; they require the matching host build. Only the Emby Connect
-flow remains service-specific. Playback/appearance settings live in Spool, without a
-redundant provider settings page. Login supports discovered servers, HTTP(S) reverse-proxy
-paths, IPv6 addresses, public profiles and manual usernames. Credentials are kept in
-the account configuration, never in artwork or probe URLs. Emby Connect is not needed
-for direct server sign-in.
+device-control surfaces; they require the matching host build. Emby Connect and
+the server-user preferences screen remain service-specific. Playback/appearance
+settings local to this device live in Spool. Login supports discovered servers,
+HTTP(S) reverse-proxy paths, IPv6 addresses, public profiles and manual usernames.
+Credentials are kept in the account configuration, never in artwork or probe
+URLs. Emby Connect is not needed for direct server sign-in.
 Bare DNS addresses try HTTPS first, then HTTP on port 8096 and the default HTTP
 port. Private literals and localhost try HTTP 8096 first. Supplied ports and proxy
 paths are preserved; an explicit scheme selects only that address and HTTPS is
@@ -268,10 +277,15 @@ python3 tools/check-sdk.py
 cmake -S sdk -B build/sdk -G Ninja && cmake --build build/sdk
 timeout 20s build/sdk/provider-contract-runner tests/contract.mjs
 QV4_FORCE_INTERPRETER=1 timeout 20s build/sdk/provider-contract-runner tests/contract.mjs
-python3 sdk/spool-provider.py build .          # dist/spool.emby-<version>.tar.zst
 VERSION=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
-python3 sdk/spool-provider.py validate "dist/spool.emby-$VERSION.tar.zst"
+python3 sdk/spool-provider.py build . --output "dist/spool.emby-$VERSION.szo"
+python3 sdk/spool-provider.py validate "dist/spool.emby-$VERSION.szo"
 ```
+
+Future packages use `.szo` (Spool Zstandard Object): the same format-3 zstd USTAR
+bytes, selected with the pinned SDK's existing `--output` option. SDK revision
+`6185eaa895f2df9b9fcb56c39a1eae35447595b5` and its locked files are unchanged.
+Published package names, release/feed URLs and SHA pins remain immutable.
 
 To try a checkout in Spool without releasing it, configure Spool with
 `-DSPOOL_PROVIDER_OVERRIDES=spool.emby=/path/to/spool-emby`.
@@ -289,10 +303,9 @@ against an authorized real Emby server.
 
 ## Releasing
 
-Prepared release: **0.1.6**, adding original and finite progressive server-
-transcoded downloads, exact-version selection, global seek-preview opt-out and
-native provider diagnostics. Retains authenticated local/remote BIF previews,
-compiled sign-in forms and Emby Connect PIN linking.
+Next-UX source version: **0.1.8**, adding the signed-in server-user preferences
+screen and `.szo` names for future package artifacts. This source work does not
+publish a release, tag or feed entry, or replace canonical packages.
 
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
 After validation, use the version in the current manifest:
@@ -305,7 +318,7 @@ git push origin "v$VERSION"
 ```
 
 `.github/workflows/release.yml` runs both Qt contract modes, verifies the SDK, builds and validates
-the archive, and attaches `spool.emby-<version>.tar.zst` plus `spool-provider.json` to a GitHub release
+the archive, and attaches `spool.emby-<version>.szo` plus `spool-provider.json` to a GitHub release
 with build provenance. It rejects tags that disagree with the manifest version.
 The optional `STORE_DISPATCH_TOKEN` secret asks `spool-player/spool-providers` to refresh immediately;
 without it, the store relies on its scheduled refresh. Release publication needs Actions enabled and
