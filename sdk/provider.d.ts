@@ -15,6 +15,15 @@
 
 export type Value = null | boolean | number | string | Value[] | { [key: string]: Value };
 
+/** Nonsecret host-approved identity for setup on one saved account/server. */
+export type SetupContext = {
+    accountId: string;
+    serverId: string;
+    serverName: string;
+    serverOrigin: string;
+    purpose: 'addProfile' | 'reconnect';
+};
+
 /** The complete set of current manifest and account capability names. */
 export type Capability = 'search' | 'userState' | 'reporting' | 'segments' | 'groupPlayback'
     | 'remoteControl' | 'streamQuality' | 'trickplay' | 'speedTest' | 'downloads' | 'downloadTranscode'
@@ -72,11 +81,11 @@ export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
 export type LogFields = Readonly<Record<string, null | boolean | number | string>>;
 
 /**
- * Given to createSource and lives as long as the account: use it for
- * connections that outlast an operation. Everything stops when the account
- * is removed, disabled or the provider is updated.
+ * The host surface shared by sources and operations, under different scopes:
+ * source services outlive any one operation; operation requests are cancelled
+ * with their call.
  */
-export interface SourceHost {
+export interface ProviderHost {
     device: Device;
     /** Frozen manifest declarations mapped to true; not account authorization. */
     readonly capabilities: Capabilities;
@@ -86,16 +95,27 @@ export interface SourceHost {
     log(level: LogLevel, message: string | (() => string), fields?: LogFields): void;
     /** Only origins the account was set up with (or manifest `origins`). */
     http(url: string, options?: HttpOptions): Promise<HttpResponse>;
-    /** 0–60000 ms. */
-    delay(milliseconds: number): Promise<void>;
-    /** ws:// or wss:// on an allowed origin; at most four open. */
-    socket(url: string, options?: { headers?: Record<string, string> }): Socket;
     /** Push to Spool: see Events. */
     emit<K extends keyof Events>(type: K, payload: Events[K]): void;
 }
 
-/** Given to each operation; its requests are cancelled with it. */
-export interface OperationHost extends SourceHost {
+/**
+ * Given to createSource and lives as long as the account: use it for
+ * connections that outlast an operation. Everything stops when the account
+ * is removed, disabled or the provider is updated.
+ */
+export interface SourceHost extends ProviderHost {
+    /** 0–60000 ms. */
+    delay(milliseconds: number): Promise<void>;
+    /** ws:// or wss:// on an allowed origin; at most four open. */
+    socket(url: string, options?: { headers?: Record<string, string> }): Socket;
+}
+
+/**
+ * Given to each operation; its requests are cancelled with it. Sockets are
+ * source-level services only: operations cannot open them.
+ */
+export interface OperationHost extends ProviderHost {
     /** 0–10000 ms. */
     delay(milliseconds: number): Promise<void>;
     /** Requires discovery declaration. UDP broadcast; replies within `timeout` ms (100–5000). */
@@ -120,9 +140,11 @@ export interface OperationHost extends SourceHost {
 }
 
 /**
- * `configuration` is what the login screen completed with (empty while that
- * screen is being shown). Keep account state in the closure, not in module
- * globals: one module serves every account of this provider.
+ * `configuration` is the account's private saved configuration. A targeted login
+ * draft receives `{setupContext, setupAccount}` instead: the context is public
+ * identity, while setupAccount is this provider's retained private configuration.
+ * New login drafts have no saved account. Keep state in the source closure, not
+ * module globals; never return setupAccount or credentials to QML.
  */
 export type CreateSource = (configuration: Record<string, Value>, host: SourceHost) => Source;
 
@@ -433,7 +455,8 @@ export type GroupAction =
 export interface Events {
     /** Something on the server changed; `itemId` narrows it. */
     changed: { itemId?: string };
-    /** Merged into the stored configuration, e.g. a refreshed token. */
+    /** Private credential update. Drafts retain it until successful setup; live
+     * accounts persist it. Never forwarded to QML/account events or support reports. */
     configuration: Record<string, Value>;
     /** Replaces all account offers; true enables only declared flags.
      * Unknown keys or non-boolean values withdraw offers fail-closed.
@@ -482,8 +505,9 @@ export type RemoteCommand =
  */
 export interface ScreenContext {
     role: 'login' | 'settings' | 'picker';
-    /** For a picker: the `pick` object resolve or runItemAction returned. */
-    arguments: Record<string, Value>;
+    /** PickRequest arguments, or login {setupContext:{accountId,serverId,serverName,serverOrigin,purpose}}.
+     * Login hints never contain credentials; private setupAccount is factory-only. */
+    arguments: Record<string, Value> & { setupContext?: SetupContext };
     /** Login draft declarations; live account effective flags; empty when closed. */
     readonly capabilities: Capabilities;
     /** Notifying, device-local boolean options for this activation family; no credentials/grants. */
@@ -498,7 +522,8 @@ export interface ScreenContext {
     allowLanDiscovery(): Promise<void>;
     /** Cancel this draft's pending discovery/consent without closing password login. */
     cancelLanDiscovery(): void;
-    /** login: { account, label, detail?, group?, configuration }; settings: { configuration? }; picker: the choice. */
+    /** login: { account, label, detail?, group?, configuration? }; private credentials may arrive via draft configuration events.
+     * settings: { configuration? }; picker: the choice. */
     complete(result: Record<string, Value>): void;
     close(): void;
 }
