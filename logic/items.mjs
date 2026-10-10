@@ -101,7 +101,7 @@ export function item(raw, features = {}) {
 export function page(result, start, limit, features = {}) {
     const rows = Array.isArray(result) ? result : result.Items || [];
     const total = Number.isSafeInteger(result.TotalRecordCount) ? result.TotalRecordCount : null;
-    const exhausted = total !== null ? start + rows.length >= total : rows.length < limit;
+    const exhausted = rows.length === 0 || (total !== null ? start + rows.length >= total : rows.length < limit);
     return { items: rows.filter(row => id(row.Id)).map(row => item(row, features)), total: total,
         exhausted: exhausted, cursor: exhausted ? null : String(start + rows.length) };
 }

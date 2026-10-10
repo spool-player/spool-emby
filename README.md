@@ -293,6 +293,8 @@ To try a checkout in Spool without releasing it, configure Spool with
 Requires Python 3, CMake, Ninja, Qt 6 Core/Qml development packages and `zstd`.
 The contract uses synthetic server responses to cover account isolation, catalogue paging,
 selected editions, quality precedence/boundaries, remux safety, audio routing and session cleanup.
+Catalogue pagination terminates on empty backend pages even with a stale positive total;
+nonempty pages advance by the raw row count before invalid IDs are filtered.
 It does not replace a smoke run against an authorized Emby server or an offscreen Spool check of the QML screens.
 
 The optional `node tests/transfer.mjs` smoke requires Node.js and FFmpeg/ffprobe.

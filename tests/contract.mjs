@@ -260,7 +260,9 @@ export function run() {
                     VideoRange: 'HDR', ExtendedVideoType: 'DolbyVision' }] },
             { Id: 'theatrical', Name: 'Theatrical', Path: 'D:\\media\\Film.mp4', Container: 'mp4' }] };
     const emby = server({
-        'GET /Users/ua/Items': () => respond({ TotalRecordCount: 3, Items: [film] }),
+        'GET /Users/ua/Items': call => respond(/[?&]StartIndex=2(?:&|$)/.test(call.url)
+            ? { TotalRecordCount: 4, Items: [{}] }
+            : { TotalRecordCount: 3, Items: /[?&]StartIndex=1(?:&|$)/.test(call.url) ? [] : [film] }),
         'GET /Users/ub/Items': () => respond({ TotalRecordCount: 3, Items: [film] }),
         'GET /Users/ua': { Policy: { EnableContentDeletion: true } },
         'GET /Users/ua/Items/list-1': { Id: 'list-1', Type: 'Playlist', CanEditItems: true },
@@ -295,8 +297,14 @@ export function run() {
             check(first['X-Emby-Authorization'].indexOf('Device="Living Room"') >= 0,
                 'header values cannot break out of quotes');
             return a.browse({ limit: 1, cursor: page.cursor }, emby.host);
-        }).then(() => {
+        }).then(page => {
+            check(page.total === 3 && page.items.length === 0 && page.exhausted && page.cursor === null,
+                'empty backend pages terminate even when the reported total is stale');
             check(emby.calls[emby.calls.length - 1].url.indexOf('StartIndex=1') > 0, 'the cursor is the next offset');
+            return a.browse({ limit: 1, cursor: '2' }, emby.host);
+        }).then(page => {
+            check(page.items.length === 0 && !page.exhausted && page.cursor === '3',
+                'filtered nonempty backend pages advance by their raw row count');
             return fails(() => a.browse({ cursor: '../1' }, emby.host), 'invalid_cursor');
         }).then(() => {
             step = 'lists';
