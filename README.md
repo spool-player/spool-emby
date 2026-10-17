@@ -305,9 +305,8 @@ against an authorized real Emby server.
 
 ## Releasing
 
-Next-UX source version: **0.1.8**, adding the signed-in server-user preferences
-screen and `.szo` names for future package artifacts. This source work does not
-publish a release, tag or feed entry, or replace canonical packages.
+Release **0.1.9** uses the source-only socket host contract and terminates
+pagination on empty backend pages even when the server's total is stale.
 
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
 After validation, use the version in the current manifest:
