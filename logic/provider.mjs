@@ -34,6 +34,12 @@ function segment(value) {
 }
 
 function start(args) {
+    // A seekable listing may be asked for any row instead of continued.
+    if (args.offset !== undefined && args.offset !== null && !args.cursor) {
+        if (!Number.isSafeInteger(args.offset) || args.offset < 0)
+            throw new Error('invalid_cursor');
+        return args.offset;
+    }
     const cursor = args.cursor ? String(args.cursor) : '0';
     if (!/^\d+$/.test(cursor))
         throw new Error('invalid_cursor');
@@ -296,7 +302,8 @@ export function createSource(configuration, sourceHost) {
                 parameters.NameLessThan = 'A';
             else if (filters.alphabet)
                 parameters.NameStartsWith = filters.alphabet;
-            return list(host, userPath('/Items'), args, parameters);
+            // Items are positional: Spool may fetch only the rows on screen.
+            return list(host, userPath('/Items'), args, parameters).then(p => Object.assign(p, { seekable: p.total !== null }));
         },
         items: (args, host) => list(host, userPath('/Items'), args, { Ids: (args.ids || []).join(',') }),
         search: catalogue.search,
