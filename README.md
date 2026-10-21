@@ -305,8 +305,8 @@ against an authorized real Emby server.
 
 ## Releasing
 
-Release **0.1.9** uses the source-only socket host contract and terminates
-pagination on empty backend pages even when the server's total is stale.
+Release **0.1.10** makes browse listings seekable: Spool can ask for any row with
+`offset` and load only what is on screen of a large library.
 
 Keep the SDK pin current, bump `version` in `manifest.json`, then push a matching `v<version>` tag.
 After validation, use the version in the current manifest:
